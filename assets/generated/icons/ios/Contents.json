@@ -1,0 +1,148 @@
+{
+  "images": [
+    {
+      "filename": "icon-80@2x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "40x40",
+      "scale": "2x"
+    },
+    {
+      "filename": "icon-120@2x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "60x60",
+      "scale": "2x"
+    },
+    {
+      "filename": "icon-116@2x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "58x58",
+      "scale": "2x"
+    },
+    {
+      "filename": "icon-174@2x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "87x87",
+      "scale": "2x"
+    },
+    {
+      "filename": "icon-160@2x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "80x80",
+      "scale": "2x"
+    },
+    {
+      "filename": "icon-240@2x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "120x120",
+      "scale": "2x"
+    },
+    {
+      "filename": "icon-360@2x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "180x180",
+      "scale": "2x"
+    },
+    {
+      "filename": "icon-20@1x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "20x20",
+      "scale": "1x"
+    },
+    {
+      "filename": "icon-40@2x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "20x20",
+      "scale": "2x"
+    },
+    {
+      "filename": "icon-60@3x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "20x20",
+      "scale": "3x"
+    },
+    {
+      "filename": "icon-29@1x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "29x29",
+      "scale": "1x"
+    },
+    {
+      "filename": "icon-58@2x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "29x29",
+      "scale": "2x"
+    },
+    {
+      "filename": "icon-87@3x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "29x29",
+      "scale": "3x"
+    },
+    {
+      "filename": "icon-40@1x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "40x40",
+      "scale": "1x"
+    },
+    {
+      "filename": "icon-120@3x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "40x40",
+      "scale": "3x"
+    },
+    {
+      "filename": "icon-180@3x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "60x60",
+      "scale": "3x"
+    },
+    {
+      "filename": "icon-76@1x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "76x76",
+      "scale": "1x"
+    },
+    {
+      "filename": "icon-152@2x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "76x76",
+      "scale": "2x"
+    },
+    {
+      "filename": "icon-167@2x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "83.5x83.5",
+      "scale": "2x"
+    },
+    {
+      "filename": "icon-1024@1x.png",
+      "idiom": "universal",
+      "platform": "ios",
+      "size": "1024x1024",
+      "scale": "1x"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  }
+}

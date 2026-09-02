@@ -1,0 +1,59 @@
+{
+  "expo": {
+    "name": "SPOTTER",
+    "slug": "spotter",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/branding/icon-source.png",
+    "scheme": "spotter",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0A0C08",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.spotter.mvp",
+      "infoPlist": {
+        "NSCameraUsageDescription": "SPOTTER uses your camera to capture photo proof of your workouts. Photos are sealed to your account — only you and your partner can ever see them."
+      }
+    },
+    "android": {
+      "package": "app.spotter.mvp",
+      "icon": "./assets/branding/icon-source.png",
+      "adaptiveIcon": {
+        "backgroundColor": "#0A0C08",
+        "foregroundImage": "./assets/branding/icon-source.png",
+        "monochromeImage": "./assets/generated/icons/android/mipmap-xxxhdpi/ic_launcher_monochrome.png"
+      },
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/generated/icons/web/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0A0C08",
+          "image": "./assets/branding/splash-source.png",
+          "imageWidth": 200,
+          "dark": {
+            "backgroundColor": "#0A0C08",
+            "image": "./assets/branding/splash-source.png"
+          }
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true,
+          "faceIDPermission": "Allow SPOTTER to use Face ID to unlock your account."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}
