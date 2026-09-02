@@ -9,7 +9,11 @@
       "@/assets/*": [
         "./assets/*"
       ]
-    }
+    },
+    "customConditions": [
+      "react-native",
+      "react-native-strict-api"
+    ]
   },
   "include": [
     "**/*.ts",

@@ -56,7 +56,7 @@ export async function commitOnboarding(settings: OnboardingSettings): Promise<{ 
     // schema.sql) is the seed; these upserts activate once env vars are set
     // and the schema is applied. Until then this branch is unreachable.
     try {
-      const { error: userError } = await supabase().from('users').upsert({
+      const { error: userError } = await supabase!.from('users').upsert({
         id: session.user.id,
         name: session.user.email.split('@')[0],
         week_start_day: settings.weekStart,
@@ -64,7 +64,7 @@ export async function commitOnboarding(settings: OnboardingSettings): Promise<{ 
       });
       if (userError) return { ok: false, error: userError.message };
 
-      const { error: memberError } = await supabase().from('memberships').upsert({
+      const { error: memberError } = await supabase!.from('memberships').upsert({
         user_id: session.user.id,
         weekly_goal: settings.weeklyGoal,
       });

@@ -75,9 +75,15 @@ function buildLines() {
   push('');
 
   const sp = json.spacing;
+  // Top-level aliases are the same values as the scale — hardcode from the
+  // scale keys so the emitted object is self-documenting and stays in sync
+  // with tokens.json even if the scale changes.
+  const aliasKeys = ['xs', 'sm', 'md', 'lg', 'xl', 'xxl', 'xxxl', 'giant', 'huge', 'mega'];
   push('export const spacing = {');
   push(`  grid: ${sp.grid},`);
-  push('  sm: 8, md: 12, lg: 16, xl: 20, xxl: 24, xxxl: 32, giant: 40, huge: 48, mega: 64,');
+  for (const k of aliasKeys) {
+    push(`  ${k}: ${sp.scale[k]},`);
+  }
   push('  scale: {');
   for (const k of Object.keys(sp.scale)) push(`    ${k}: ${sp.scale[k]},`);
   push('  },');

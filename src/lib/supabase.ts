@@ -12,6 +12,9 @@
  *    the mock labels itself "DEV DEMO — local mock" on the welcome screen.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+// Minimal process shim for Expo env-var typing (EXPO_PUBLIC_* vars are
+// inlined by Metro; TS needs the process global typed).
+declare const process: { env: Record<string, string | undefined> };
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
@@ -22,6 +25,15 @@ export const EXPO_PUBLIC_SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? 
 export const EXPO_PUBLIC_SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
 
 export const isDevMode = !EXPO_PUBLIC_SUPABASE_URL || !EXPO_PUBLIC_SUPABASE_ANON_KEY;
+// Upstream type bug: supabase-js 2.114 declares `SupabaseAuthClient` as an
+// options interface (not the auth client), so `auth.getSession()` etc. type
+// as missing. The runtime object is AuthClient; cast for the 4 call sites.
+type AuthClientLike = {
+  getSession(): Promise<{ data: { session: { user: { id: string; email: string | null; created_at: string } } | null } }>;
+  signOut(): Promise<{ error: unknown }>;
+  signInWithPassword(credentials: { email: string; password: string }): Promise<{ error: unknown }>;
+  signUp(credentials: { email: string; password: string }): Promise<{ error: unknown }>;
+};
 
 const STORAGE_KEY = 'spotter.session';
 
@@ -89,7 +101,7 @@ export interface AppSession {
 
 export async function getStoredSession(): Promise<AppSession | null> {
   if (!isDevMode && supabase) {
-    const { data } = await supabase.auth.getSession();
+    const { data } = await (supabase.auth as unknown as AuthClientLike).getSession();
     const s = data.session;
     if (!s?.user) return null;
     return {
@@ -104,9 +116,10 @@ export async function getStoredSession(): Promise<AppSession | null> {
   return null;
 }
 
-export async function startDevSession(email: string): Promise<MockSession> {
-  const session: MockSession = {
-    user: devMock.createUser(email),
+export async function startDevSession(email: string): Promise<AppSession> {
+  const user = await devMock.createUser(email);
+  const session: AppSession = {
+    user,
     isDevMode: true,
   };
   await SecureStore.setItemAsync(STORAGE_KEY, JSON.stringify(session));
@@ -115,7 +128,7 @@ export async function startDevSession(email: string): Promise<MockSession> {
 
 export async function clearSession(): Promise<void> {
   if (!isDevMode && supabase) {
-    await supabase.auth.signOut();
+    await (supabase.auth as unknown as AuthClientLike).signOut();
   }
   try {
     await SecureStore.deleteItemAsync(STORAGE_KEY);
@@ -144,17 +157,17 @@ export async function authenticate(email: string, password: string): Promise<Aut
     try {
       // Single path: try sign-in first; fall back to sign-up if the account
       // doesn't exist yet (matches the no-fork onboarding spec).
-      const { error: signInError } = await supabase.auth.signInWithPassword({
+      const { error: signInError } = await (supabase.auth as unknown as AuthClientLike).signInWithPassword({
         email: normalized,
         password,
       });
       if (!signInError) return { ok: true };
-      const { error: signUpError } = await supabase.auth.signUp({
+      const { error: signUpError } = await (supabase.auth as unknown as AuthClientLike).signUp({
         email: normalized,
         password,
       });
       if (signUpError) {
-        return { ok: false, error: signUpError.message };
+        return { ok: false, error: signUpError.message ?? 'Sign-up failed.' };
       }
       return { ok: true };
     } catch (e) {

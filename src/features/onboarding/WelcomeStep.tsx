@@ -7,7 +7,12 @@
  * same screen — no create-vs-login fork.
  */
 import React, { useState } from 'react';
-import { Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, KeyboardAvoidingView as KAV, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+// strict-api types break KAV's JSX signature (upstream RN 0.86 preview);
+// cast to a plain component type for this screen.
+const KeyboardAvoidingView = KAV as unknown as React.ComponentType<{ behavior?: 'height' | 'position' | 'padding' | undefined; children?: React.ReactNode }>;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept after cast for clarity
+void KAV;
 
 import { AppButton, TextButton } from '@/components/AppButton';
 import { isDevMode } from '@/lib/supabase';
