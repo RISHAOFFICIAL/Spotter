@@ -24,14 +24,22 @@ npm run android    # Android emulator
 npm run web        # web (desktop preview)
 ```
 
-No `.env` needed for default dev mode.
+No `.env` needed for default dev mode. To switch to REAL mode, create a
+`.env` in the repo root with the two `EXPO_PUBLIC_` vars for your Supabase
+project (Metro inlines them at start; there is no checked-in `.env.example`
+— the two vars are the whole contract):
+
+```sh
+EXPO_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
+```
 
 ## Two backend modes (auto-detected)
 
 | Mode | When | What happens |
 |---|---|---|
 | **DEV MOCK** | `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_ANON_KEY` **absent** (default) | App runs end-to-end against a clearly-labeled local mock in `src/lib/mock.ts` (AsyncStorage-backed; session + stub user + persisted onboarding settings). Welcome screen shows “DEV DEMO — LOCAL MOCK”. No network. |
-| **REAL** | both env vars **present** (`.env` from `.env.example`) | `src/lib/supabase.ts` creates the real client; onboarding writes users/memberships per `supabase/schema.sql`. Sessions persist via SecureStore. |
+| **REAL** | both env vars **present** | `src/lib/supabase.ts` creates the real client; onboarding writes users/groups/memberships per `supabase/schema.sql`. Sessions persist via SecureStore. |
 
 Switching modes is just setting/removing the two env vars.
 
@@ -41,7 +49,8 @@ One screen — no create-vs-login fork. “Get started” reveals an inline
 email+password form on the Welcome screen; submit → `authenticate()` in
 `src/lib/supabase.ts`:
 - REAL mode: tries `signInWithPassword`, falls back to `signUp` if the account
-  doesn't exist (one tap, no fork).
+  doesn't exist (one tap, no fork); onboarding then ensures a personal
+  `groups` row and writes `users` + `memberships` rows (see `supabase/schema.sql`).
 - DEV MOCK: creates a labeled `dev_*` demo user + session locally.
 
 Terms line: the privacy promise only (photos sealed to your account) — honest,
