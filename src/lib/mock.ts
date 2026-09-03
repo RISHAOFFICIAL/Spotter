@@ -79,4 +79,28 @@ export const devMock = {
     await writeValue(`profile:${profile.id}`, profile);
     return profile;
   },
+
+  /**
+   * SLICE B: dev workouts (per-user key). The SHAPE mirrors the real
+   * `workouts` table row (photo_path = local file path standing in for the
+   * storage path; logged_at = now()). Keeps the camera-tap → log flow fully
+   * walkable without Supabase.
+   */
+  async listWorkouts(userId: string): Promise<WorkoutRow[]> {
+    const rows = await readValue<WorkoutRow[]>(`workouts:${userId}`);
+    return rows ?? [];
+  },
+  async saveWorkouts(userId: string, rows: WorkoutRow[]): Promise<void> {
+    await writeValue(`workouts:${userId}`, rows);
+  },
 };
+
+/** So DEV MOCK and REAL have the same pickup point. Pairs with workouts rows. */
+export interface WorkoutRow {
+  id: string;
+  user_id: string;
+  photo_path: string;
+  logged_at: string;
+  workout_type: string | null;
+  created_at: string;
+}

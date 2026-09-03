@@ -109,6 +109,51 @@ export interface Database {
           },
         ];
       };
+      workouts: {
+        Row: {
+          id: string;
+          user_id: string;
+          group_id: string | null;
+          /** Storage path inside the private `workouts` bucket — NEVER a public URL. */
+          photo_path: string;
+          /** Server-set on insert (default now()); the photo's proof timestamp. */
+          logged_at: string;
+          workout_type: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          group_id?: string | null;
+          photo_path: string;
+          logged_at?: string;
+          workout_type?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          group_id?: string | null;
+          photo_path?: string;
+          logged_at?: string;
+          workout_type?: string | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'workouts_user_id_fkey';
+            columns: ['user_id'];
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'workouts_group_id_fkey';
+            columns: ['group_id'];
+            referencedRelation: 'groups';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;
