@@ -93,6 +93,157 @@ export const devMock = {
   async saveWorkouts(userId: string, rows: WorkoutRow[]): Promise<void> {
     await writeValue(`workouts:${userId}`, rows);
   },
+  /** Append (or replace by id) one workout row for a user. */
+  async pushWorkout(userId: string, row: WorkoutRow): Promise<void> {
+    const rows = (await readValue<WorkoutRow[]>(`workouts:${userId}`)) ?? [];
+    const idx = rows.findIndex((r) => r.id === row.id);
+    if (idx >= 0) rows[idx] = row;
+    else rows.push(row);
+    await writeValue(`workouts:${userId}`, rows);
+  },
+
+  // ---- SLICE C: two-user pairing --------------------------------
+
+  /**
+   * DEV MOCK pair state. Returns an object describing whether the current user
+   * is paired (and with whom) in the dev mock. There is NO real backend here —
+   * this is the honest dev stand-in for "my accepted partner" that real mode
+   * gets from memberships. `partner` is null until accepted.
+   */
+  async getPairState(userId: string): Promise<{
+    partner: { id: string; name: string } | null;
+    /** True when an invite from this user exists and was accepted. */
+    accepted: boolean;
+  }> {
+    const state = await readValue<{ partner: { id: string; name: string } | null; accepted: boolean }>(
+      `pair:${userId}`,
+    );
+    return state ?? { partner: null, accepted: false };
+  },
+
+  async savePairState(
+    userId: string,
+    state: { partner: { id: string; name: string } | null; accepted: boolean },
+  ): Promise<void> {
+    await writeValue(`pair:${userId}`, state);
+  },
+
+  async listInvites(userId: string): Promise<DevInvite[]> {
+    return (await readValue<DevInvite[]>(`invites:${userId}`)) ?? [];
+  },
+
+  async saveInvites(userId: string, rows: DevInvite[]): Promise<void> {
+    await writeValue(`invites:${userId}`, rows);
+  },
+
+  /** Resolve a dev-mock code (accepts the "DEV-" prefix form or the raw token).
+   * Searches the current session user's own invites store (the invite they
+   * pre-generated on the Welcome row). */
+  async findInviteByCode(code: string): Promise<DevInvite | null> {
+    const normalized = code.trim().replace(/^DEV-/i, '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    const session = await readValue<SessionUser>('user');
+    if (!session?.id || !normalized) return null;
+    const rows = (await readValue<DevInvite[]>(`invites:${session.id}`)) ?? [];
+    const hit = rows.find(
+      (r) => r.token.replace(/^DEV-/i, '').replace(/[^A-Z0-9]/gi, '').toUpperCase() === normalized,
+    );
+    return hit ?? null;
+  },
+
+  /** Add a membership row for a dev user in a group (pair group). */
+  async addDevMembership(membership: DevMembership): Promise<void> {
+    const key = `memberships:${membership.user_id}`;
+    const rows = (await readValue<DevMembership[]>(key)) ?? [];
+    const existing = rows.find((m) => m.group_id === membership.group_id);
+    if (existing) {
+      Object.assign(existing, membership);
+    } else {
+      rows.push(membership);
+    }
+    await writeValue(key, rows);
+  },
+
+  async getDevMemberships(userId: string): Promise<DevMembership[]> {
+    return (await readValue<DevMembership[]>(`memberships:${userId}`)) ?? [];
+  },
+
+  /**
+   * Seed the DEV PARTNER account on first use: a fixed id (deterministic for
+   * the demo), a few pre-created workout logs for today (labeled "Dev Partner
+   * — preset demo logs"), and their half of the pair membership. Idempotent.
+   */
+  async getOrSeedPartner(): Promise<SessionUser> {
+    const key = 'partnerUser';
+    const existing = await readValue<SessionUser>(key);
+    if (existing) return existing;
+    const partner: SessionUser = {
+      id: 'dev_partner',
+      email: DEV_PARTNER_EMAIL,
+      createdAt: new Date().toISOString(),
+    };
+    await writeValue(key, partner);
+    // Preset pair-state on the partner side: paired with whoever the current
+    // user is (reads the active user email from the session store).
+    const self = await readValue<SessionUser>('user');
+    const partnerSide = {
+      partner: self ? { id: self.id, name: self.email.split('@')[0] } : null,
+      accepted: true,
+    };
+    await writeValue(`pair:${partner.id}`, partnerSide);
+    // A few "today" logs so the invitee's shared feed has partner history from
+    // the very first render ("They're already logging. Your turn." is honest).
+    const existingLogs = (await readValue<WorkoutRow[]>(`workouts:${partner.id}`)) ?? [];
+    if (existingLogs.length === 0) {
+      const now = Date.now();
+      const seed: WorkoutRow[] = [
+        {
+          id: `dev_partner_w1`,
+          user_id: partner.id,
+          photo_path: 'mock://partner/run.jpg',
+          logged_at: new Date(now - 5400_000).toISOString(),
+          workout_type: 'Run',
+          created_at: new Date(now - 5400_000).toISOString(),
+        },
+        {
+          id: `dev_partner_w2`,
+          user_id: partner.id,
+          photo_path: 'mock://partner/lift.jpg',
+          logged_at: new Date(now - 72 * 3600_000).toISOString(),
+          workout_type: 'Lift',
+          created_at: new Date(now - 72 * 3600_000).toISOString(),
+        },
+      ];
+      await writeValue(`workouts:${partner.id}`, seed);
+    }
+    return partner;
+  },
+
+  /** Mark the current dev user as paired with the preset partner (both sides). */
+  async acceptDevPair(userId: string): Promise<void> {
+    const partner = await this.getOrSeedPartner();
+    const selfProfile = await this.getProfile(userId);
+    const selfName = selfProfile?.name ?? (await readValue<SessionUser>('user'))?.email.split('@')[0] ?? 'You';
+    await this.savePairState(userId, { partner: { id: partner.id, name: 'Dev Partner' }, accepted: true });
+    await this.savePairState(partner.id, { partner: { id: userId, name: selfName }, accepted: true });
+    // Pair membership on BOTH sides (inviter keeps their personal group too —
+    // the feed reads the pair group; weekly goal stays per user).
+    await this.addDevMembership({
+      group_id: DEV_PAIR_GROUP_ID,
+      user_id: userId,
+      weekly_goal: selfProfile?.weekly_goal ?? 3,
+      role: 'member',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    await this.addDevMembership({
+      group_id: DEV_PAIR_GROUP_ID,
+      user_id: partner.id,
+      weekly_goal: 3,
+      role: 'member',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+  },
 };
 
 /** So DEV MOCK and REAL have the same pickup point. Pairs with workouts rows. */
@@ -104,3 +255,45 @@ export interface WorkoutRow {
   workout_type: string | null;
   created_at: string;
 }
+
+// ---------------------------------------------------------------------------
+// SLICE C: dev-mock invites + pairing — a second mock user ("Dev Partner",
+// dev_partner@spotter.test) + a pair group, so the two-user invite/accept/feed
+// flow is walkable end-to-end with no backend. Clearly labeled; nothing here
+// touches the network. Persisted shapes mirror the real `invites`, `groups`
+// and `memberships` tables.
+// ---------------------------------------------------------------------------
+
+export interface DevInvite {
+  id: string;
+  inviter_id: string;
+  token: string;
+  invitee_email: string | null;
+  status: 'pending' | 'accepted';
+  created_at: string;
+  accepted_at: string | null;
+}
+
+export interface DevMembership {
+  group_id: string;
+  user_id: string;
+  weekly_goal: number;
+  role: 'member' | 'admin';
+  created_at: string;
+  updated_at: string;
+}
+
+export const DEV_PARTNER_EMAIL = 'dev_partner@spotter.test';
+
+/** Human-friendly mock code always shown as `DEV-XXXX-XXXX` (the middle dash
+ * is the *readable* pair, matching the mock's "code entry" UX). REAL tokens
+ * keep the same shape/masking (display `XXXX-XXXX`, match case-insensitively
+ * on the flavor's digits). */
+export function formatMockCode(raw: string): string {
+  return `DEV-${raw}`;
+}
+
+/** In DEV MOCK, both ourselves and the preset partner share one pair group id,
+ * so their logs (both pre-seeded here and captured in-app later) merge into
+ * the same shared feed. Keeps the pair story honest without a backend. */
+export const DEV_PAIR_GROUP_ID = 'dev-pair-group';

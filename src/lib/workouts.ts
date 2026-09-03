@@ -19,6 +19,8 @@ export type WorkoutType = (typeof WORKOUT_TYPES)[number];
 /** A logged workout as Home / the feed needs it. */
 export interface WorkoutLog {
   id: string;
+  /** Author's user id (own or partner's) — the feed shows the name. */
+  userId: string;
   /** Storage path inside the private bucket; NEVER a URL. */
   photoPath: string;
   /** ISO timestamp — server default now() in REAL mode. */
@@ -30,6 +32,13 @@ export interface WorkoutLog {
   photoUri: string;
 }
 
+export interface PartnerInfo {
+  id: string;
+  firstName: string;
+  /** True when the partner has logged at least one workout (feed card). */
+  hasLogs: boolean;
+}
+
 export interface WeeklyContext {
   weeklyGoal: number;
   weekStartDay: string;
@@ -37,6 +46,8 @@ export interface WeeklyContext {
   logs: WorkoutLog[];
   /** true when the user has an accepted partner (slice C wires this). */
   hasPartner: boolean;
+  /** The accepted partner (null when solo). */
+  partner: PartnerInfo | null;
   /** Week already ended AND goal missed (ring turns danger red only then). */
   weekEndedUnmet: boolean;
 }

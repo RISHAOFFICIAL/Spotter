@@ -16,7 +16,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
 
-import { devMock, type WorkoutRow } from './mock';
+import { devMock, type WorkoutRow, type DevMembership } from './mock';
 import { getStoredSession, supabase } from './supabase';
 import { createSignedUrls } from './storage';
 import { WEEK_START_DAYS } from './settings';
@@ -26,6 +26,7 @@ import {
   WORKOUT_BUCKET,
   type WorkoutLog,
   type WeeklyContext,
+  type PartnerInfo,
   type WorkoutType,
   type DevPhoto,
 } from './workouts';
@@ -79,6 +80,7 @@ async function storeDevPhoto(
 function rowToLog(row: WorkoutRow, photoUri: string, authorName: string): WorkoutLog {
   return {
     id: row.id,
+    userId: row.user_id,
     photoPath: row.photo_path, // ALWAYS the storage path / dev file — never a URL
     loggedAt: row.logged_at,
     workoutType: row.workout_type,
@@ -109,7 +111,7 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
   // Defaults match onboarding presets (goal 3, week starts Mon).
   let weeklyGoal = 3;
   let weekStartDay = 'Mon';
-  let hasPartner = false;
+  let partner: PartnerInfo | null = null;
   const userName = session.user.email.split('@')[0] ?? 'You';
 
   if (session.isDevMode) {
@@ -141,52 +143,122 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
   weekEnd.setDate(weekEnd.getDate() + 7);
 
   if (session.isDevMode || !supabase) {
-    // DEV MOCK — same shape from async storage + local files.
+    // ---- DEV MOCK — same shape from async storage + local files (slice C:
+    // two-user: own logs count for the ring; partner logs merge into the feed).
+    const pair = await devMock.getPairState(session.user.id);
+    partner = pair.partner
+      ? {
+          id: pair.partner.id,
+          firstName: (pair.partner.name ?? 'Partner').split(' ')[0],
+          hasLogs: (await devMock.listWorkouts(pair.partner.id)).length > 0,
+        }
+      : null;
+
     const rows = await devMock.listWorkouts(session.user.id);
-    const logs: WorkoutLog[] = [];
-    for (const row of rows) {
-      const t = new Date(row.logged_at);
-      if (Number.isNaN(t.getTime())) continue;
-      if (t < weekStart || t >= weekEnd) continue;
-      logs.push(rowToLog(row, row.photo_path, row.user_id === session.user.id ? userName : 'Partner'));
-    }
-    logs.sort((a, b) => (a.loggedAt < b.loggedAt ? 1 : -1));
+    const partnerRows = partner ? await devMock.listWorkouts(partner.id) : [];
+    const allRows = [...rows, ...partnerRows];
+    const inWeek = (r: WorkoutRow) => {
+      const t = new Date(r.logged_at);
+      return !Number.isNaN(t.getTime()) && t >= weekStart && t < weekEnd;
+    };
+    const logs = allRows
+      .filter(inWeek)
+      .map((r) =>
+        rowToLog(
+          r,
+          r.photo_path, // DEV: photo_path is a local file URI — display directly
+          r.user_id === session.user.id ? userName : (partner?.firstName ?? 'Partner'),
+        ),
+      )
+      .sort((a, b) => (a.loggedAt < b.loggedAt ? 1 : -1));
     return {
       ok: true,
       context: {
         weeklyGoal,
         weekStartDay,
         logs,
-        hasPartner,
+        hasPartner: !!partner,
+        partner,
         // DEV mock never "ends" a week — ring stays honest-volt, no red scare.
         weekEndedUnmet: false,
       },
     };
   }
 
-  // REAL mode — RLS guarantees only this user's rows are visible.
-  const { data: workoutRows, error: rowsError } = await supabase
+  // REAL mode — rings count OWN logs only; the feed shows own + partner's.
+  // Photo isolation: own rows via `workouts` RLS; partner rows ONLY through
+  // the pair-scoped read policy (schema.sql `workouts_select_pair` — a single
+  // accepted partner, additive to own-row RLS, never relaxing the bucket).
+  const { data: ownRows, error: ownError } = await supabase
     .from('workouts')
     .select('id, user_id, photo_path, logged_at, workout_type, created_at')
     .eq('user_id', session.user.id)
     .order('logged_at', { ascending: false });
-  if (rowsError) return { ok: false, error: rowsError.message };
+  if (ownError) return { ok: false, error: ownError.message };
 
-  const inWeek = (workoutRows ?? []).filter((r) => {
+  // My accepted partner: the OTHER member of my (single) pair group.
+  const { data: myMemberships } = await supabase
+    .from('memberships')
+    .select('group_id')
+    .eq('user_id', session.user.id);
+  const pairGroupId = myMemberships?.[0]?.group_id ?? null;
+  let partnerId: string | null = null;
+  let partnerName = 'Partner';
+  if (pairGroupId) {
+    const { data: pairMems } = await supabase
+      .from('memberships')
+      .select('user_id')
+      .eq('group_id', pairGroupId)
+      .neq('user_id', session.user.id)
+      .limit(2);
+    if (pairMems && pairMems.length === 1) {
+      partnerId = pairMems[0].user_id;
+    }
+  }
+  if (partnerId) {
+    const { data: partnerUser } = await supabase
+      .from('users')
+      .select('name')
+      .eq('id', partnerId)
+      .maybeSingle();
+    if (partnerUser?.name) partnerName = partnerUser.name.split(' ')[0];
+  }
+  partner =
+    pairGroupId && partnerId
+      ? { id: partnerId, firstName: partnerName, hasLogs: true }
+      : null;
+
+  // Partner rows are visible through the pair-scope policy; fetch the last
+  // 50 (the whole partner journal is out of MVP scope — feed = weekly context).
+  const { data: partnerRows, error: partnerError } = partnerId
+    ? await supabase
+        .from('workouts')
+        .select('id, user_id, photo_path, logged_at, workout_type, created_at')
+        .eq('user_id', partnerId)
+        .order('logged_at', { ascending: false })
+        .limit(50)
+    : ({ data: null, error: null } as const);
+  if (partnerError) return { ok: false, error: partnerError.message };
+
+  const inWeek = (r: { logged_at: string }) => {
     const t = new Date(r.logged_at);
     return !Number.isNaN(t.getTime()) && t >= weekStart && t < weekEnd;
-  });
+  };
+  const weekRows = [...(ownRows ?? []), ...(partnerRows ?? [])].filter(inWeek);
+  const signed = await createSignedUrls(weekRows.map((r) => r.photo_path));
 
-  const signed = await createSignedUrls(inWeek.map((r) => r.photo_path));
-
+  const ownWeek = (ownRows ?? []).filter(inWeek);
   return {
     ok: true,
     context: {
       weeklyGoal,
       weekStartDay,
-      logs: inWeek.map((r) => rowToLog(r, signed.get(r.photo_path) ?? '', userName)),
-      hasPartner, // slice C wires partners in
-      weekEndedUnmet: now >= weekEnd && inWeek.length < weeklyGoal,
+      logs: weekRows
+        .map((r) => rowToLog(r, signed.get(r.photo_path) ?? '', r.user_id === session.user.id ? userName : partnerName))
+        .sort((a, b) => (a.loggedAt < b.loggedAt ? 1 : -1)),
+      hasPartner: !!partner,
+      partner,
+      weekEndedUnmet: now >= weekEnd && ownWeek.length < weeklyGoal,
     },
   };
 }
@@ -224,7 +296,6 @@ export async function logWorkout(input: NewWorkout): Promise<LogWorkoutResult> {
     try {
       const photo = await storeDevPhoto(session.user.id, workoutId, input.photoUri);
       const profile = await devMock.getProfile(session.user.id);
-      const rows = await devMock.listWorkouts(session.user.id);
       const row: WorkoutRow = {
         id: workoutId,
         user_id: session.user.id,
@@ -233,8 +304,7 @@ export async function logWorkout(input: NewWorkout): Promise<LogWorkoutResult> {
         workout_type: input.workoutType ?? null,
         created_at: now,
       };
-      rows.push(row);
-      await devMock.saveWorkouts(session.user.id, rows);
+      await devMock.pushWorkout(session.user.id, row);
       return {
         ok: true,
         log: rowToLog(
