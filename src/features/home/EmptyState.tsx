@@ -16,20 +16,31 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, icons, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
 
-export type EmptyCase = 'noLogsNoPartner' | 'noLogsPartner';
+export type EmptyCase = 'noLogsNoPartner' | 'noLogsPartner' | 'partnerNoLogs';
 
 export function EmptyState({ variant, partnerName }: { variant: EmptyCase; partnerName?: string }) {
   const isNoPartner = variant === 'noLogsNoPartner';
+  const partnerNoLogs = variant === 'partnerNoLogs';
   return (
     <View style={styles.wrap}>
-      <Ionicons name={isNoPartner ? 'fitness-outline' : 'watch-outline'} size={64} color={colors.text.muted.hex} />
+      <Ionicons
+        name={isNoPartner ? 'fitness-outline' : partnerNoLogs ? 'watch-outline' : 'watch-outline'}
+        size={64}
+        color={colors.text.muted.hex}
+      />
       <Text style={[textStyles.bodyStrong.style, { color: colors.text.primary.hex, textAlign: 'center' }]}>
-        {isNoPartner ? 'Nothing logged yet' : 'Waiting on the first one'}
+        {isNoPartner
+          ? 'Nothing logged yet'
+          : partnerNoLogs
+            ? `Nothing yet — waiting on ${partnerName ?? 'your partner'}`
+            : 'Waiting on the first one'}
       </Text>
       <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex, textAlign: 'center' }]}>
         {isNoPartner
           ? 'First week starts whenever you tap the camera. Partner optional.'
-          : `You and ${partnerName ?? 'your partner'} both start at zero.`}
+          : partnerNoLogs
+            ? 'Their first log lands here the second they tap the camera.'
+            : `You and ${partnerName ?? 'your partner'} both start at zero.`}
       </Text>
     </View>
   );

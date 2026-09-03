@@ -26,11 +26,24 @@ function Gate() {
       }}
     >
       {!session ? (
-        <Stack.Screen name="(auth)/welcome" />
+        <>
+          <Stack.Screen name="(auth)/welcome" />
+          {/* Accept stays reachable without a session (the whole point). */}
+          <Stack.Screen name="(accept)/index" />
+          <Stack.Screen name="(invite)/index" />
+        </>
       ) : !onboarded ? (
-        <Stack.Screen name="(onboarding)/index" />
+        <>
+          <Stack.Screen name="(onboarding)/index" />
+          <Stack.Screen name="(accept)/index" />
+          <Stack.Screen name="(invite)/index" />
+        </>
       ) : (
-        <Stack.Screen name="(home)/(tabs)/index" />
+        <>
+          <Stack.Screen name="(home)/(tabs)/index" />
+          <Stack.Screen name="(accept)/index" />
+          <Stack.Screen name="(invite)/index" />
+        </>
       )}
     </Stack>
   );

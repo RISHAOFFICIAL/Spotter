@@ -12,9 +12,9 @@
  * Partner presence is slice C; the "just you" label is the placeholder.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/features/auth/AuthProvider';
@@ -23,14 +23,16 @@ import { BottomBar } from '@/features/home/BottomBar';
 import { WeeklyRing } from '@/features/home/WeeklyRing';
 import { FeedCard } from '@/features/home/FeedCard';
 import { EmptyState, InviteBanner, type EmptyCase } from '@/features/home/EmptyState';
-import { colors, spacing } from '@/theme/tokens';
+import { InviteSheet } from '@/features/invites/InviteSheet';
+import { colors, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
 import { fetchWeeklyContext } from '@/lib/workoutStore';
 import type { WeeklyContext, WorkoutLog } from '@/lib/workouts';
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
-  const { isDevMode } = useAuth();
+  const { isDevMode, session } = useAuth();
+  const router = useRouter();
   const params = useLocalSearchParams<{ toast?: string }>();
 
   const [ctx, setCtx] = useState<WeeklyContext | null>(null);
@@ -38,9 +40,24 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [now, setNow] = useState(new Date());
   const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [welcomeToast, setWelcomeToast] = useState<string | null>(null);
   const mounted = useRef(true);
+
+  // In-app welcome toast after a fresh accept (invite-flow.md §5: one-time,
+  // above the bottom bar — push notifications are out of MVP scope).
+  useEffect(() => {
+    const toast = params.toast;
+    if (toast && !welcomeToast) setWelcomeToast(toast);
+  }, [params.toast, welcomeToast]);
+
+  useEffect(() => {
+    if (!welcomeToast) return;
+    const t = setTimeout(() => setWelcomeToast(null), 4000);
+    return () => clearTimeout(t);
+  }, [welcomeToast]);
 
   const load = useCallback(async (background = false) => {
     if (!background) setLoading(true);
@@ -77,11 +94,12 @@ export default function HomeScreen() {
     void load(true);
   }, [load]);
 
-  const weekCount = ctx?.logs.length ?? 0;
+  const weekCount = ctx?.logs.filter((l) => l.userId === session?.user.id).length ?? 0;
   const hasPartner = ctx?.hasPartner ?? false;
+  const partnerFirstName = ctx?.partner?.firstName;
   const emptyVariant: EmptyCase = hasPartner ? 'noLogsPartner' : 'noLogsNoPartner';
 
-  // Status line under the ring (home-screen.md §2).
+  // Status line under the ring (home-screen.md §2; rings are PERSONAL).
   const statusLine = (() => {
     if (ctx && ctx.weekEndedUnmet) {
       return { text: `${ctx.weeklyGoal} missed. The ring's honest — next week.`, color: colors.text.danger.hex, strong: true };
@@ -92,7 +110,11 @@ export default function HomeScreen() {
     if (ctx && weekCount >= ctx.weeklyGoal) {
       return { text: `${ctx.weeklyGoal} of ${ctx.weeklyGoal} — week complete. Solid.`, color: colors.status.success.hex, strong: true };
     }
-    return { text: ctx ? `${weekCount} of ${ctx.weeklyGoal} — keep it going` : '', color: colors.text.secondary.hex, strong: false };
+    return {
+      text: ctx ? `${weekCount} of ${ctx.weeklyGoal} — keep it going${hasPartner && partnerFirstName ? `, ${partnerFirstName}'s watching` : ''}` : '',
+      color: colors.text.secondary.hex,
+      strong: false,
+    };
   })();
 
   return (
@@ -136,22 +158,48 @@ export default function HomeScreen() {
           </Text>
         )}
 
-        {/* Partner presence (slice C wires real invites) */}
+        {/* Partner presence (slice C): banner while solo; join-code affordance; disappears when paired. */}
         {!hasPartner && !bannerDismissed && (
-          <InviteBanner onInvite={() => { /* slice C: invite sheet */ }} onDismiss={() => setBannerDismissed(true)} />
+          <InviteBanner
+            onInvite={() => setInviteOpen(true)}
+            onDismiss={() => setBannerDismissed(true)}
+          />
+        )}
+        {!hasPartner && bannerDismissed && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Join with a code"
+            onPress={() => router.push('/(accept)')}
+            style={styles.joinCode}
+            hitSlop={8}
+          >
+            <Text style={[textStyles.captionStrong.style, { color: colors.text.muted.hex }]}>
+              Have a code from your partner? Enter it here
+            </Text>
+          </Pressable>
         )}
 
         {/* Feed */}
         {ctx && ctx.logs.length === 0 && (
-          <EmptyState variant={emptyVariant} partnerName={undefined} />
+          <EmptyState variant={emptyVariant} partnerName={partnerFirstName} />
         )}
         {ctx && ctx.logs.length > 0 && (
           <>
-            <Text style={[textStyles.label.style, styles.feedHeader]}>RECENT</Text>
+            <View style={styles.feedHeaderRow}>
+              <Text style={[textStyles.label.style, styles.feedHeader]}>RECENT</Text>
+              {hasPartner && partnerFirstName ? (
+                <Text style={[textStyles.label.style, { color: colors.text.muted.hex }]}>
+                  just you & {partnerFirstName}
+                </Text>
+              ) : null}
+            </View>
             <View style={styles.feed}>
               {ctx.logs.map((log) => (
                 <FeedCard key={log.id} log={log} now={now} />
               ))}
+              {hasPartner && partnerFirstName && ctx.logs.every((l) => l.userId === session?.user.id) && (
+                <EmptyState variant="partnerNoLogs" partnerName={partnerFirstName} />
+              )}
             </View>
           </>
         )}
@@ -167,6 +215,16 @@ export default function HomeScreen() {
       <BottomBar onHome={() => {}} onCamera={() => setLogOpen(true)} weekCount={weekCount} />
 
       <LogSheet visible={logOpen} onClose={() => setLogOpen(false)} onLogged={handleLogged} />
+      <InviteSheet visible={inviteOpen} onClose={() => setInviteOpen(false)} />
+
+      {/* In-app welcome toast after accepting (one-time; push is out of MVP scope). */}
+      {welcomeToast && (
+        <View style={[styles.toast, { bottom: 92 + Math.max(insets.bottom, 12) }]} pointerEvents="none">
+          <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex, textAlign: 'center' }]}>
+            {welcomeToast}
+          </Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -194,6 +252,25 @@ const styles = StyleSheet.create({
   },
   ringBlock: { alignItems: 'center', marginTop: spacing.sm, marginBottom: spacing.sm },
   ringLoading: { height: 132, justifyContent: 'center' },
-  feedHeader: { color: colors.text.muted.hex, marginTop: spacing.xxl, marginBottom: spacing.sm },
+  feedHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.xxl,
+    marginBottom: spacing.sm,
+  },
+  feedHeader: { color: colors.text.muted.hex },
   feed: { gap: spacing.md },
+  joinCode: { alignItems: 'center', marginTop: spacing.lg, paddingVertical: spacing.sm },
+  toast: {
+    position: 'absolute',
+    left: spacing.lg,
+    right: spacing.lg,
+    backgroundColor: colors.background.raised.hex,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
 });

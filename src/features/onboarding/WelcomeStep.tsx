@@ -20,6 +20,7 @@ import { colors, icons, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
 
 import { OnboardingScreen } from './OnboardingScreen';
+import { InviteRow } from '@/features/invites/InviteRow';
 
 const DEV_BANNER = 'DEV DEMO — LOCAL MOCK';
 
@@ -127,6 +128,8 @@ export function WelcomeStep({
             Your photos are sealed to your account. Only you and your partner can ever see them.
           </Text>
         </View>
+        {/* Slice C: forced-invite affordance — pre-generates a shareable code on mount (invite-flow.md §1). */}
+        <InviteRow />
       </ScrollView>
     </OnboardingScreen>
   );
