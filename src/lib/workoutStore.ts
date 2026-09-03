@@ -16,7 +16,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
 
-import { devMock, type WorkoutRow, type DevMembership } from './mock';
+import { devMock, type WorkoutRow, type DevMembership, DEV_PAIR_GROUP_ID } from './mock';
 import { getStoredSession, supabase } from './supabase';
 import { createSignedUrls } from './storage';
 import { WEEK_START_DAYS } from './settings';
@@ -299,6 +299,10 @@ export async function logWorkout(input: NewWorkout): Promise<LogWorkoutResult> {
       const row: WorkoutRow = {
         id: workoutId,
         user_id: session.user.id,
+        // Mirror the real mode: workouts carry the pair group id so the
+        // Realtime broadcast filter can key on it (dev mock has no
+        // backend — this row shape matches the real table).
+        group_id: DEV_PAIR_GROUP_ID,
         photo_path: photo.localUri,
         logged_at: now,
         workout_type: input.workoutType ?? null,

@@ -270,7 +270,8 @@ export const devMock = {
   },
   /** Pair an existing dev user with another existing dev user (two-user flow:
    * the invitee pairs with the INVITER of the code, not the preset partner).
-   * Creates pair state + pair memberships on both sides. */
+   * Creates pair state + pair memberships on both sides (each side keeps its
+   * own weekly goal). */
   async acceptDevPairWith(userId: string, partnerUser: SessionUser): Promise<void> {
     const selfProfile = await this.getProfile(userId);
     const selfUser =
@@ -278,6 +279,7 @@ export const devMock = {
       (await readValue<SessionUser>('user'));
     const selfName = selfProfile?.name ?? selfUser?.email.split('@')[0] ?? 'You';
     const partnerName = partnerUser.email.split('@')[0] ?? 'Partner';
+    const partnerProfile = await this.getProfile(partnerUser.id);
     await this.savePairState(userId, { partner: { id: partnerUser.id, name: partnerName }, accepted: true });
     await this.savePairState(partnerUser.id, { partner: { id: userId, name: selfName }, accepted: true });
     // Pair membership on BOTH sides (inviter keeps their personal group too —
@@ -293,7 +295,7 @@ export const devMock = {
     await this.addDevMembership({
       group_id: DEV_PAIR_GROUP_ID,
       user_id: partnerUser.id,
-      weekly_goal: 3,
+      weekly_goal: partnerProfile?.weekly_goal ?? 3,
       role: 'member',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -305,6 +307,9 @@ export const devMock = {
 export interface WorkoutRow {
   id: string;
   user_id: string;
+  /** Pair group id (mirrors the real workouts.group_id column; dev mock sets
+   * DEV_PAIR_GROUP_ID so the row shape matches the real table). */
+  group_id?: string | null;
   photo_path: string;
   logged_at: string;
   workout_type: string | null;
