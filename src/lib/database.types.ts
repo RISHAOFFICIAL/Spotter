@@ -42,19 +42,29 @@ export interface Database {
         Row: {
           id: string;
           name: string;
+          creator_id: string;
           created_at: string;
         };
         Insert: {
           id?: string;
           name: string;
+          creator_id: string;
           created_at?: string;
         };
         Update: {
           id?: string;
           name?: string;
+          creator_id?: string;
           created_at?: string;
         };
-        Relationships: [];
+        Relationships: [
+          {
+            foreignKeyName: 'groups_creator_id_fkey';
+            columns: ['creator_id'];
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+        ];
       };
       memberships: {
         Row: {

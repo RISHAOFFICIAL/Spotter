@@ -56,8 +56,27 @@ export async function commitOnboarding(settings: OnboardingSettings): Promise<{ 
     // schema.sql) is the seed; these upserts activate once env vars are set
     // and the schema is applied. Until then this branch is unreachable.
     try {
+      const userId = session.user.id;
+      // Ensure the user has a personal group (SLICE A: no group UI yet, but
+      // memberships.group_id is NOT NULL in the schema, so the upsert can't
+      // omit it). One row per user; idempotent on re-onboarding.
+      const { data: groupData, error: groupError } = await supabase!.from('groups')
+        .select('id')
+        .eq('creator_id', userId)
+        .maybeSingle();
+      if (groupError) return { ok: false, error: groupError.message };
+      let groupId = groupData?.id;
+      if (!groupId) {
+        const { data: created, error: createError } = await supabase!.from('groups')
+          .insert({ name: 'Personal', creator_id: userId })
+          .select('id')
+          .single();
+        if (createError || !created) return { ok: false, error: createError?.message ?? 'Could not create your group.' };
+        groupId = created.id;
+      }
+
       const { error: userError } = await supabase!.from('users').upsert({
-        id: session.user.id,
+        id: userId,
         name: session.user.email.split('@')[0],
         week_start_day: settings.weekStart,
         timezone: detectTimezone(),
@@ -65,8 +84,10 @@ export async function commitOnboarding(settings: OnboardingSettings): Promise<{ 
       if (userError) return { ok: false, error: userError.message };
 
       const { error: memberError } = await supabase!.from('memberships').upsert({
-        user_id: session.user.id,
+        user_id: userId,
+        group_id: groupId,
         weekly_goal: settings.weeklyGoal,
+        role: 'admin',
       });
       if (memberError) return { ok: false, error: memberError.message };
       return { ok: true };

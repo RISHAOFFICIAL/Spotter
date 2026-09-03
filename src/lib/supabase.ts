@@ -31,8 +31,8 @@ export const isDevMode = !EXPO_PUBLIC_SUPABASE_URL || !EXPO_PUBLIC_SUPABASE_ANON
 type AuthClientLike = {
   getSession(): Promise<{ data: { session: { user: { id: string; email: string | null; created_at: string } } | null } }>;
   signOut(): Promise<{ error: unknown }>;
-  signInWithPassword(credentials: { email: string; password: string }): Promise<{ error: unknown }>;
-  signUp(credentials: { email: string; password: string }): Promise<{ error: unknown }>;
+  signInWithPassword(credentials: { email: string; password: string }): Promise<{ error: { message?: string } | null }>;
+  signUp(credentials: { email: string; password: string }): Promise<{ error: { message?: string } | null }>;
 };
 
 const STORAGE_KEY = 'spotter.session';
