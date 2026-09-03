@@ -1,6 +1,8 @@
 /**
  * (home)/(tabs)/_layout — Home tab shell (MVP: Home == Feed, single screen).
- * Stub for slice B: renders the Home screen only.
+ * The app renders its own pinned BottomBar (CameraButton + inert slots) so
+ * the native tab bar is hidden; this stays a single Tabs screen for the
+ * router shape (design README #2).
  */
 import React from 'react';
 import { Tabs } from 'expo-router';
@@ -12,16 +14,10 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarStyle: {
-          backgroundColor: colors.background.surface.hex,
-          borderTopColor: 'rgba(255,255,255,0.08)',
-        },
-        tabBarActiveTintColor: colors.brand.primary.hex,
-        tabBarInactiveTintColor: colors.text.secondary.hex,
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
+        tabBarStyle: { display: 'none' },
       }}
     >
-      <Tabs.Screen name="index" options={{ title: 'Home', tabBarIcon: () => null }} />
+      <Tabs.Screen name="index" />
     </Tabs>
   );
 }
