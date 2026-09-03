@@ -257,6 +257,21 @@ export const devMock = {
         },
       ];
       await writeValue(`workouts:${partner.id}`, seed);
+      // The preset partner also owns a PENDING invite for their fixed code so
+      // the code shown in the demo resolves everywhere (including pre-signup).
+      const partnerInvites = (await readValue<DevInvite[]>(`invites:${partner.id}`)) ?? [];
+      if (!partnerInvites.some((r) => r.token === DEV_PARTNER_CODE)) {
+        partnerInvites.push({
+          id: 'dev_invite_partner',
+          inviter_id: partner.id,
+          token: DEV_PARTNER_CODE,
+          invitee_email: null,
+          status: 'pending',
+          created_at: new Date(now).toISOString(),
+          accepted_at: null,
+        });
+        await writeValue(`invites:${partner.id}`, partnerInvites);
+      }
     }
     return partner;
   },
@@ -345,12 +360,34 @@ export interface DevMembership {
 
 export const DEV_PARTNER_EMAIL = 'dev_partner@spotter.test';
 
+/** Devices/dev-demo: the preset partner's invite code, seeded with the SAME
+ * display format the inviter sees (`DEV-XXXX-XXXX` — see invites.ts
+ * formatDevInviteCode). Iterating here means the code shown in the demo
+ * matches the code the accept flow resolves, on every device. */
+const DEV_PARTNER_CODE = 'ABCD1234';
+
+/** DEV MOCK display: ALWAYS `DEV-XXXX-XXXX`, no matter how the input is passed
+ * (raw 8 chars or already `DEV-`-prefixed), so nobody mistakes it for a real
+ * code and the 4+4 split always aligns with the REAL format. */
+export function formatDevInviteCode(ref: string): string {
+  const raw = ref.replace(/^DEV-/i, '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  const core = raw.slice(-8);
+  return `DEV-${core.slice(0, 4)}-${core.slice(4, 8)}`;
+}
+
+/** True when the input is the display form of a dev-mock code
+ * (`DEV-XXXX-XXXX`). Used by the UI to label demo codes. */
+export function isDevInviteDisplay(code: string): boolean {
+  return /^DEV-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code.trim().toUpperCase());
+}
+
 /** Human-friendly mock code always shown as `DEV-XXXX-XXXX` (the middle dash
  * is the *readable* pair, matching the mock's "code entry" UX). REAL tokens
  * keep the same shape/masking (display `XXXX-XXXX`, match case-insensitively
- * on the flavor's digits). */
+ * on the flavor's digits). Passing the seeded partner token yields exactly the
+ * code shown in the demo's accept flow. */
 export function formatMockCode(raw: string): string {
-  return `DEV-${raw}`;
+  return formatDevInviteCode(raw || DEV_PARTNER_CODE);
 }
 
 /** In DEV MOCK, both ourselves and the preset partner share one pair group id,

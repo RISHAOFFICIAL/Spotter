@@ -1,0 +1,8 @@
+{
+  "@react-native-async-storage/async-storage": "smoke/async-storage.js",
+  "expo-crypto": "smoke/expo-crypto.js",
+  "expo-secure-store": "smoke/expo-secure-store.js",
+  "expo-file-system": "smoke/expo-file-system.js",
+  "react-native": "smoke/react-native.js",
+  "@supabase/supabase-js": "smoke/supabase-js.js"
+}

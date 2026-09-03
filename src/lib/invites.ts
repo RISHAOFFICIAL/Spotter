@@ -19,7 +19,7 @@
 import * as Crypto from 'expo-crypto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { devMock, type DevInvite } from './mock';
+import { devMock, formatDevInviteCode, type DevInvite } from './mock';
 import { getStoredSession, supabase } from './supabase';
 
 export const INVITE_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -43,13 +43,10 @@ export function generateInviteToken(): string {
 }
 
 export function formatInviteCode(token: string): string {
+  // REAL mode: the raw 8-char token → `ABCD-EFGH`.
   const t = token.replace(/[^A-Z0-9]/gi, '').toUpperCase();
-  // DEV mock passes a prefixed token: `DEV-` + raw → keep `DEV-ABCD-EFGH`.
-  // Real passes the raw token → `ABCD-EFGH`. Splitting on the LAST 8 chars
-  // guarantees both forms are always 8-char after the prefix.
   const core = t.slice(-8);
-  const prefix = t.slice(0, -8);
-  return `${prefix}${core.slice(0, 4)}-${core.slice(4, 8)}`;
+  return `${core.slice(0, 4)}-${core.slice(4, 8)}`;
 }
 
 export function normalizeInviteCode(input: string): string {
@@ -117,7 +114,7 @@ export async function getOrCreateInviteCode(): Promise<InviteInfo> {
       }
     }
     await devMock.getOrSeedPartner();
-    return { displayCode: formatInviteCode(`DEV-${token}`), token, isDev: true };
+    return { displayCode: formatDevInviteCode(token), token, isDev: true };
   }
 
   // REAL mode: one invite row per user+token, idempotent.
