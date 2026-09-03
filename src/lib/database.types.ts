@@ -154,9 +154,60 @@ export interface Database {
           },
         ];
       };
+      invites: {
+        Row: {
+          id: string;
+          /** The user who created the invite (RLS: visible only to them). */
+          inviter_id: string;
+          /** Random, readable code — the capability to pair. No expiry in MVP. */
+          token: string;
+          /** Optional pre-addressed email (link-based invites leave it null). */
+          invitee_email: string | null;
+          status: 'pending' | 'accepted';
+          created_at: string;
+          accepted_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          inviter_id: string;
+          token: string;
+          invitee_email?: string | null;
+          status?: 'pending' | 'accepted';
+          created_at?: string;
+          accepted_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          inviter_id?: string;
+          token?: string;
+          invitee_email?: string | null;
+          status?: 'pending' | 'accepted';
+          created_at?: string;
+          accepted_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'invites_inviter_id_fkey';
+            columns: ['inviter_id'];
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      /** Public (unauthenticated ok): resolve a pending invite code to the minimal Accept-screen info. */
+      get_invite: {
+        Args: { p_token: string };
+        Returns: Json;
+      };
+      /** Authenticated: pair the current auth.uid() with the inviter of this token (one transaction). */
+      accept_invite: {
+        Args: { p_token: string };
+        Returns: Json;
+      };
+    };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
   };
