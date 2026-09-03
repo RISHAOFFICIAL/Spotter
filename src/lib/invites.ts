@@ -44,7 +44,12 @@ export function generateInviteToken(): string {
 
 export function formatInviteCode(token: string): string {
   const t = token.replace(/[^A-Z0-9]/gi, '').toUpperCase();
-  return `${t.slice(0, 4)}-${t.slice(4, 8)}`;
+  // DEV mock passes a prefixed token: `DEV-` + raw → keep `DEV-ABCD-EFGH`.
+  // Real passes the raw token → `ABCD-EFGH`. Splitting on the LAST 8 chars
+  // guarantees both forms are always 8-char after the prefix.
+  const core = t.slice(-8);
+  const prefix = t.slice(0, -8);
+  return `${prefix}${core.slice(0, 4)}-${core.slice(4, 8)}`;
 }
 
 export function normalizeInviteCode(input: string): string {
@@ -167,16 +172,17 @@ export async function lookupInvite(code: string): Promise<PendingInviteInfo> {
     return { found: false, inviterName: '', inviterHasLogs: false };
   }
 
-  // DEV MOCK — resolve against the dev invites stores.
+  // DEV MOCK — resolve against the dev invites stores (any user's — the code
+  // belongs to whoever generated it pre-signup).
   const invite = await devMock.findInviteByCode(code);
   if (!invite || invite.status !== 'pending') {
     return { found: false, inviterName: '', inviterHasLogs: false };
   }
-  const seed = await devMock.getOrSeedPartner();
+  const inviter = await devMock.getUserById(invite.inviter_id);
   return {
     found: true,
-    inviterName: 'Dev Partner',
-    inviterHasLogs: (await devMock.listWorkouts(seed.id)).length > 0,
+    inviterName: inviter?.email.split('@')[0] ?? 'Dev Partner',
+    inviterHasLogs: (await devMock.listWorkouts(invite.inviter_id)).length > 0,
   };
 }
 
@@ -201,9 +207,9 @@ export async function acceptInvite(code: string): Promise<AcceptInviteResult> {
   if (!normalized) return { ok: false, error: 'Enter a valid code.' };
 
   if (session.isDevMode || !supabase) {
-    // Dev mock: the only resolvable invite is the user's own pre-generated
-    // DEV- code (the demo has one preset partner). Keep it honest — an
-    // arbitrary code fails exactly like a real invalid code.
+    // Dev mock: resolve the code across all dev users (v2 two-user flow: the
+    // invitee pairs with the INVITER; the single-user demo path pairs with
+    // the preset partner when accepting your own self-generated code).
     const invite = await devMock.findInviteByCode(normalized);
     if (!invite) {
       return {
@@ -211,6 +217,14 @@ export async function acceptInvite(code: string): Promise<AcceptInviteResult> {
         error: "That's not a valid SPOTTER code. In this demo, use the code shown on the invite screen (DEV-…).",
       };
     }
+    const inviter = await devMock.getUserById(invite.inviter_id);
+    if (inviter && inviter.id !== session.user.id) {
+      // Real two-user accept: pair the current user with the inviter.
+      await devMock.acceptDevPairWith(session.user.id, inviter);
+      return { ok: true, inviterName: inviter.email.split('@')[0] ?? 'Partner' };
+    }
+    // Self-accept keeps the slice-C single-user demo story: pairs with the
+    // preset demo partner so the shared feed renders without a real person.
     await devMock.acceptDevPair(session.user.id);
     return { ok: true, inviterName: 'Dev Partner' };
   }
