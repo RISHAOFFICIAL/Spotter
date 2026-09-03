@@ -27,6 +27,20 @@ import { CameraView, useCameraPermissions, type CameraCapturedPicture } from 'ex
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import type { StyleProp, ViewStyle } from 'react-native';
+
+// RN 0.86 strict-api typing drops `style` (and some other ViewProps) from
+// expo-camera's CameraView JSX props even though CameraViewProps extends
+// ViewProps. This local passthrough keeps the typed props (style + facing)
+// usable with zero runtime behavior change — the alias casts the component
+// (not the styles) and is scoped to this file.
+type CameraViewProps_ = {
+  ref?: React.Ref<CameraView>;
+  style: StyleProp<ViewStyle>;
+  facing: 'front' | 'back';
+  onMountError?: () => void;
+};
+const CameraViewT = CameraView as unknown as React.ComponentType<CameraViewProps_>;
 
 import { AppButton } from '@/components/AppButton';
 import { colors, radius, spacing } from '@/theme/tokens';
@@ -126,9 +140,9 @@ export function LogSheet({ visible, onClose, onLogged }: Props) {
           <>
             <View style={styles.cameraWrap}>
               {permission?.granted ? (
-                <CameraView
+                <CameraViewT
                   ref={cameraRef}
-                  style={styles.camera}
+                  style={styles.camera as StyleProp<ViewStyle>}
                   facing="back"
                   onMountError={() => setError('Couldn\u2019t open the camera. Try again.')}
                 />

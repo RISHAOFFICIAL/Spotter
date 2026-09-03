@@ -21,6 +21,27 @@ const C = 2 * Math.PI * R;
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
+// The ring SVG is absolutely positioned inside a fixed-size box.
+// `<Svg style=...>` is valid at runtime (react-native-svg does accept a
+// style prop) but the prop is dropped from the Svg JSX type by RN 0.86's
+// strict-api typing, so the style moves to a wrapping View that centers the
+// SVG. Same layout, zero runtime change.
+const RingSvg = ({ children, size }: { children: React.ReactNode; size: number }) => (
+  <View
+    style={{
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      width: size,
+      height: size,
+      alignItems: 'center',
+      justifyContent: 'center',
+    }}
+  >
+    <Svg width={size} height={size}>{children}</Svg>
+  </View>
+);
+
 export function WeeklyRing({ count, goal, weekEndedUnmet }: { count: number; goal: number; weekEndedUnmet: boolean }) {
   const clamped = Math.min(Math.max(count, 0), goal);
   const fraction = goal > 0 ? clamped / goal : 0;
@@ -61,7 +82,7 @@ export function WeeklyRing({ count, goal, weekEndedUnmet }: { count: number; goa
       style={styles.wrap}
     >
       <View style={styles.ringBox}>
-        <Svg width={OUTER_D} height={OUTER_D} style={styles.ring}>
+        <RingSvg size={OUTER_D}>
           <Circle
             cx={OUTER_D / 2}
             cy={OUTER_D / 2}
@@ -84,7 +105,7 @@ export function WeeklyRing({ count, goal, weekEndedUnmet }: { count: number; goa
             rotation={-90}
             origin={`${OUTER_D / 2}, ${OUTER_D / 2}`}
           />
-        </Svg>
+        </RingSvg>
         <View style={styles.center}>
           <Text style={[textStyles.ringNumber.style, { color: colors.text.primary.hex }]}>
             {numeral}
@@ -101,6 +122,5 @@ export function WeeklyRing({ count, goal, weekEndedUnmet }: { count: number; goa
 const styles = StyleSheet.create({
   wrap: { alignItems: 'center' },
   ringBox: { width: OUTER_D, height: OUTER_D, alignItems: 'center', justifyContent: 'center' },
-  ring: { position: 'absolute', top: 0, left: 0 },
   center: { alignItems: 'center', justifyContent: 'center' },
 });

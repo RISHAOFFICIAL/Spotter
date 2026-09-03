@@ -95,10 +95,12 @@ export function EnterCodeScreen() {
     setBusy(false);
     // In-app welcome toast is wired on Home (params.toast) — push is out of
     // MVP scope (invite-flow §5). Pass it through the route when it exists.
+    // Typed route literal (router.d.ts): '/(home)/(tabs)' is the collapsed
+    // index under the (home) group — '/(home)' alone is not in the href union.
     router.replace(
       res.inviterName
-        ? { pathname: '/(home)/(tabs)/index', params: { toast: `You're in. ${res.inviterName}'s logs are live in your feed.` } }
-        : '/(home)',
+        ? { pathname: '/(home)/(tabs)', params: { toast: `You're in. ${res.inviterName}'s logs are live in your feed.` } }
+        : '/(home)/(tabs)',
     );
   };
 
@@ -158,7 +160,7 @@ export function EnterCodeScreen() {
             {error && <Text style={[textStyles.caption.style, { color: colors.text.danger.hex, textAlign: 'center' }]}>{error}</Text>}
             <AppButton label="Look up code" onPress={() => void resolve(code)} disabled={code.length < 5} loading={busy} />
             <View style={styles.soloRow}>
-              <TextButton label="Just look around — I\u2019ll pair later" onPress={() => router.replace('/(home)')} color={colors.text.muted.hex} />
+              <TextButton label="Just look around — I\u2019ll pair later" onPress={() => router.replace('/(home)/(tabs)')} color={colors.text.muted.hex} />
             </View>
           </>
         )}
@@ -220,7 +222,7 @@ export function EnterCodeScreen() {
             {error && <Text style={[textStyles.caption.style, { color: colors.text.danger.hex, textAlign: 'center' }]}>{error}</Text>}
 
             <View style={styles.soloRow}>
-              <TextButton label="Just look around" onPress={() => router.replace('/(home)')} color={colors.text.muted.hex} />
+              <TextButton label="Just look around" onPress={() => router.replace('/(home)/(tabs)')} color={colors.text.muted.hex} />
             </View>
           </>
         )}

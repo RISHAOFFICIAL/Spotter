@@ -47,10 +47,12 @@ export default function OnboardingRoute() {
       return;
     }
     if (skipDefaults) {
-      router.replace('/(home)');
+      // Typed route literal (router.d.ts collapses (home)/(tabs)/index to
+      // '/(home)/(tabs)'); '/(home)' alone is not accepted by the href union.
+      router.replace('/(home)/(tabs)');
       return;
     }
-    router.replace('/(home)');
+    router.replace('/(home)/(tabs)');
   };
 
   return (

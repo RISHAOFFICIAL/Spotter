@@ -4,8 +4,17 @@
  * link (bottom-left, muted per spec).
  */
 import React from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+// SafeAreaView's JSX props are typed via react-native-safe-area-context's
+// NativeSafeAreaViewProps, which RN 0.86 strict-api typing narrows so that
+// `style` is dropped. This local alias restores the style prop with the same
+// runtime component — no `any`, no global loosening.
+const SafeAreaViewT = SafeAreaView as unknown as React.ComponentType<{
+  style: StyleProp<ViewStyle>;
+  edges: readonly ('top' | 'bottom' | 'left' | 'right')[];
+  children?: React.ReactNode;
+}>;
 
 import { AppButton, ProgressBar, TextButton } from '@/components/AppButton';
 import { colors, spacing } from '@/theme/tokens';
@@ -35,7 +44,10 @@ export function OnboardingScreen({
   footer?: React.ReactNode;
 }) {
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom', 'left', 'right']}>
+    <SafeAreaViewT
+      style={styles.safe as StyleProp<ViewStyle>}
+      edges={['top', 'bottom', 'left', 'right']}
+    >
       <View style={styles.screen}>
         <ProgressBar fraction={step / 3} />
         <View style={styles.headerRow}>
@@ -71,7 +83,7 @@ export function OnboardingScreen({
           )}
         </View>
       </View>
-    </SafeAreaView>
+    </SafeAreaViewT>
   );
 }
 
