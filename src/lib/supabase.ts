@@ -135,6 +135,13 @@ export async function clearSession(): Promise<void> {
   } catch {}
 }
 
+/** True when the app runs against the REAL Supabase backend (not the dev
+ * mock). Used by the delete-account flow to tell DEV (real deletion) from
+ * REAL (forward-compatible stub, see accountDeletion.ts). */
+export function isRealMode(): boolean {
+  return !isDevMode && !!supabase;
+}
+
 // ---------------------------------------------------------------------------
 // Unified auth entry: single path (no signup-vs-login fork). One tap on
 // "Get started" opens the inline email+password form; submitting here either

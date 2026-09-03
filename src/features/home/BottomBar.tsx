@@ -1,13 +1,16 @@
 /**
  * BottomBar — the fixed 5-slot tab bar (home-screen.md §5). Home + Feed both
  * point at the same single screen in MVP (Home = Feed, design README #2);
- * Calendar + Profile are dimmed inert placeholders (no locked-badge/upsell
- * language — free-first). The center camera slot is the 80pt primary action
- * that overflows the bar; it always wins.
+ * Calendar is a dimmed inert placeholder (no locked-badge/upsell language —
+ * free-first). The center camera slot is the 80pt primary action that
+ * overflows the bar; it always wins. Profile is now a REAL minimal surface
+ * (compliance brief #2 §4): it opens the Profile route (account info +
+ * in-app Delete account, App Store 5.1.1(v)) — no lock, no upsell.
  */
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, shadows, spacing } from '@/theme/tokens';
@@ -25,6 +28,7 @@ export function BottomBar({
   weekCount: number;
 }) {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   return (
     <View style={[styles.bar, { paddingBottom: Math.max(insets.bottom, 12) }]}>
       {/* Home — active */}
@@ -47,10 +51,17 @@ export function BottomBar({
         <Ionicons name="calendar-outline" size={iconsTab} color={colors.text.secondary.hex} opacity={0.4} />
       </View>
 
-      {/* Profile — dimmed inert placeholder in MVP (sheet is slice C) */}
-      <View style={[styles.slot, styles.inert]}>
-        <Ionicons name="person-outline" size={iconsTab} color={colors.text.secondary.hex} opacity={0.4} />
-      </View>
+      {/* Profile — minimal real surface (compliance brief #2 §4): account
+          info + in-app Delete account (App Store 5.1.1(v)). */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Profile"
+        onPress={() => router.push('/(profile)')}
+        style={styles.slot}
+        hitSlop={6}
+      >
+        <Ionicons name="person-outline" size={iconsTab} color={colors.text.secondary.hex} />
+      </Pressable>
     </View>
   );
 }

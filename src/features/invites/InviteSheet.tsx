@@ -1,8 +1,8 @@
 /**
  * InviteSheet — bottom sheet from the Home banner / "Invite a partner"
- * (invite-flow.md §2). Headline + body + "Send the link" primary (OS share
- * sheet) + "Copy link" ghost (clipboard swap "Copied ✓" 1.5s) + ✕ close +
- * scrim tap-to-dismiss. Free only, no upsell.
+ * (invite-flow.md §2; compliance-copy-spec.md §5). Headline + body + "Send the
+ * code" primary (OS share sheet) + "Copy code" ghost (clipboard swap
+ * "Copied ✓" 1.5s) + ✕ close + scrim tap-to-dismiss. Free only, no upsell.
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, Share, StyleSheet, Text, View } from 'react-native';
@@ -69,19 +69,19 @@ export function InviteSheet({ visible, onClose }: { visible: boolean; onClose: (
           Bring your gym partner in
         </Text>
         <Text style={[textStyles.caption.style, styles.body]}>
-          They get the link, download the app, and your names pair up. Free — for both of you.
+          They enter your 8-character code, download the app, and your names pair up. Free — for both of you.
         </Text>
         {invite?.displayCode ? (
           <Text style={[textStyles.label.style, styles.code]}>
             {invite.isDev ? `DEMO CODE ${invite.displayCode}` : `CODE ${invite.displayCode}`}
           </Text>
         ) : null}
-        <Pressable accessibilityRole="button" accessibilityLabel="Send the link" onPress={() => void share()} style={({ pressed }) => [styles.primary, pressed && { opacity: 0.9 }]}>
-          <Text style={[textStyles.bodyStrong.style, { color: colors.text.onVolt.hex }]}>Send the link</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="Send the code" onPress={() => void share()} style={({ pressed }) => [styles.primary, pressed && { opacity: 0.9 }]}>
+          <Text style={[textStyles.bodyStrong.style, { color: colors.text.onVolt.hex }]}>Send the code</Text>
         </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="Copy link" onPress={() => void copy()} style={styles.ghost} hitSlop={8}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Copy code" onPress={() => void copy()} style={styles.ghost} hitSlop={8}>
           <Text style={[textStyles.captionStrong.style, { color: colors.text.muted.hex }]}>
-            {copied ? 'Copied ✓' : 'Copy link'}
+            {copied ? 'Copied ✓' : 'Copy code'}
           </Text>
         </Pressable>
       </View>

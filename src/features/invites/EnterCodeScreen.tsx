@@ -174,7 +174,7 @@ export function EnterCodeScreen() {
               {info.inviterHasLogs ? "They're already logging. Your turn." : "They're waiting for you."}
             </Text>
             <Text style={[textStyles.body.style, styles.subhead]}>
-              Accept and you\u2019ll see each other\u2019s photo-proof logs and one shared weekly ring.
+              Accept and you\u2019ll see each other\u2019s photo-proof logs. Your weekly ring counts only your workouts — theirs counts only theirs.
             </Text>
             <View style={styles.privacyRow}>
               <Text style={{ fontSize: 14, color: colors.brand.primary.hex }}>✓</Text>

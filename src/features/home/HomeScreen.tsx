@@ -100,18 +100,32 @@ export default function HomeScreen() {
   const emptyVariant: EmptyCase = hasPartner ? 'noLogsPartner' : 'noLogsNoPartner';
 
   // Status line under the ring (home-screen.md §2; rings are PERSONAL).
+  // Compliance brief #2 (spec §3): the paired branches use "your ring" wording;
+  // branch on hasPartner && partnerFirstName for the 0-logs and partial cases
+  // before the generic branches. Goal-met and week-over-unmet stay generic.
+  const paired = hasPartner && !!partnerFirstName;
   const statusLine = (() => {
     if (ctx && ctx.weekEndedUnmet) {
       return { text: `${ctx.weeklyGoal} missed. The ring's honest — next week.`, color: colors.text.danger.hex, strong: true };
     }
     if (weekCount === 0) {
+      if (paired) {
+        return { text: ctx ? `0 of ${ctx.weeklyGoal}. Your ring — one tap when you're done.` : '', color: colors.text.secondary.hex, strong: false };
+      }
       return { text: ctx ? `0 of ${ctx.weeklyGoal} this week. One tap when you're done.` : '', color: colors.text.secondary.hex, strong: false };
     }
     if (ctx && weekCount >= ctx.weeklyGoal) {
       return { text: `${ctx.weeklyGoal} of ${ctx.weeklyGoal} — week complete. Solid.`, color: colors.status.success.hex, strong: true };
     }
+    if (paired) {
+      return {
+        text: ctx ? `${weekCount} of ${ctx.weeklyGoal} — your ring, ${partnerFirstName} fills theirs.` : '',
+        color: colors.text.secondary.hex,
+        strong: false,
+      };
+    }
     return {
-      text: ctx ? `${weekCount} of ${ctx.weeklyGoal} — keep it going${hasPartner && partnerFirstName ? `, ${partnerFirstName}'s watching` : ''}` : '',
+      text: ctx ? `${weekCount} of ${ctx.weeklyGoal} — keep it going.` : '',
       color: colors.text.secondary.hex,
       strong: false,
     };

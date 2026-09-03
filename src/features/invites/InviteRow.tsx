@@ -1,5 +1,6 @@
 /**
- * InviteRow — the "Send your gym partner the link now" affordance (invite-flow.md §1).
+ * InviteRow — the "Send your gym partner the invite code" affordance
+ * (invite-flow.md §1; compliance-copy-spec.md §1).
  *
  * Renders on the Welcome screen (before signup). On mount it PRE-GENERATES the
  * invite code (persisted to AsyncStorage in dev / an invites row in real mode)
@@ -25,9 +26,10 @@ import {
   type InviteInfo,
 } from '@/lib/invites';
 
-/** Exact copy per invite-flow.md §7. */
-export const INVITE_ROW_LABEL = 'Send your gym partner the link now';
-export const INVITE_SENT_LINE = 'Link sent. They\u2019ll show up in your feed when they accept.';
+/** Exact copy per compliance-copy-spec.md §1 (verbatim; code, not link). */
+export const INVITE_ROW_LABEL = 'Send your gym partner the invite code';
+export const INVITE_ROW_MICROCOPY = 'They open SPOTTER, enter this 8-character code, and you\u2019re paired.';
+export const INVITE_SENT_LINE = 'Code shared. They\u2019ll show up in your feed when they accept.';
 
 export function InviteRow() {
   const [invite, setInvite] = useState<InviteInfo | null>(null);
@@ -56,11 +58,16 @@ export function InviteRow() {
     try {
       // The OS share sheet is the last hop before sending — one tap to open,
       // one tap to send (two-tap rule). No SMS/WhatsApp SDK, no permissions.
+      // Honesty fix (spec §1): iOS resolves on cancel with `dismissedAction` —
+      // read the result and ONLY swap to the success line on a real share.
       const message = inviteMessageTemplate(invite.displayCode);
-      await Share.share({ message });
-      setSent(true);
-      // After share completes the row swaps to the success line (spec §1) —
-      // it stays as confirmation and never returns to the CTA this session.
+      const result = await Share.share({ message });
+      if (result.action === 'sharedAction') {
+        setSent(true);
+        // After share completes the row swaps to the success line (spec §1) —
+        // it stays as confirmation and never returns to the CTA this session.
+      }
+      // dismissedAction (iOS) → keep the row as-is; no false confirmation.
     } catch {
       // User dismissed the sheet — keep the row as-is; no dead end.
     }
@@ -106,6 +113,10 @@ export function InviteRow() {
           </Text>
         </Pressable>
       ) : null}
+      {/* New microcopy under the row (spec §1; caption/muted/centered). */}
+      <Text style={[textStyles.caption.style, { color: colors.text.muted.hex, textAlign: 'center', marginTop: spacing.xs }]}>
+        {INVITE_ROW_MICROCOPY}
+      </Text>
       {error && (
         <Text style={[textStyles.caption.style, { color: colors.text.danger.hex, textAlign: 'center' }]}>
           {error}

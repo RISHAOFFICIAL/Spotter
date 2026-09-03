@@ -1,25 +1,65 @@
 /**
  * FeedCard — a workout log in the feed (home-screen.md §4). Horizontal card:
  * [photo 64×64 | name + type + timestamp]. Photo tap → full-screen viewer
- * (no pinch/zoom in MVP, ✕ to close). Reaction chips 🔥👏❤️🙄 are
- * MVP-UI-ONLY: they render per spec but are inert (no persistence — that's
- * Phase 2); flagged here so nobody blocks on them.
+ * (no pinch/zoom in MVP, ✕ to close).
+ *
+ * OWNER CONTROL (compliance brief #2 §5): every card carries a non-destructive
+ * "Remove photo" action (overflow ellipsis ••• on the card) that deletes the
+ * OWNER's own photo + log after a confirm step; partner/other-user cards are
+ * read-only (the action renders only when logged-in user == log.userId).
+ *
+ * Reaction chips 🔥👏❤️🙄 are REMOVED (compliance brief #2 §4): they were
+ * inert MVP-UI-ONLY UI (no persistence). Hidden entirely, nothing replaces the
+ * space; real reactions return in Phase 2 with persistence.
  */
 import React, { useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 
-import { colors, radius, shadows, spacing } from '@/theme/tokens';
+import { colors, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
 import { relativeLogTime, type WorkoutLog } from '@/lib/workouts';
+import { useAuth } from '@/features/auth/AuthProvider';
+import { removeWorkout } from '@/lib/workoutStore';
 
-export const REACTIONS_MVP_UI_ONLY = true; // chips render, taps are inert (Phase 2 data)
-
+/** Owner-only "Remove photo" — see compliance brief #2 §5. */
 export function FeedCard({ log, now }: { log: WorkoutLog; now: Date }) {
+  const { session } = useAuth();
   const [viewerOpen, setViewerOpen] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [removed, setRemoved] = useState(false);
   const hasPhoto = !!log.photoUri;
   const typeLabel = log.workoutType && log.workoutType.length > 0 ? log.workoutType : 'Workout';
+  const isOwner = !!session && session.user.id === log.userId;
+
+  const requestRemove = () => {
+    if (removing || removed) return;
+    // Confirm step — never a single tap (UGC control, brief #2 §5).
+    Alert.alert(
+      'Remove this photo?',
+      "This deletes this workout's photo proof from your feed.",
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove photo',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setRemoving(true);
+              const res = await removeWorkout(log.id);
+              setRemoving(false);
+              if (res.ok) {
+                setRemoved(true);
+              } else {
+                Alert.alert("Couldn't remove it", res.error ?? 'Try again in a moment.');
+              }
+            })();
+          },
+        },
+      ],
+    );
+  };
 
   return (
     <View style={styles.card}>
@@ -35,32 +75,45 @@ export function FeedCard({ log, now }: { log: WorkoutLog; now: Date }) {
         </Pressable>
         <View style={styles.right}>
           <View style={styles.rowTop}>
-            <Text style={[textStyles.captionStrong.style, { color: colors.text.primary.hex }]} numberOfLines={1}>
+            <Text style={[textStyles.captionStrong.style, styles.author]} numberOfLines={1}>
               {log.authorName}
             </Text>
             {hasPhoto && (
               <Ionicons name="checkmark-circle" size={14} color={colors.status.success.hex} accessibilityLabel="Photo verified" />
             )}
+            {/* Owner-only overflow control (non-destructive; confirm step inside). */}
+            {isOwner && !removed && (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Remove photo"
+                onPress={requestRemove}
+                hitSlop={8}
+                style={styles.more}
+              >
+                {removing ? (
+                  <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>…</Text>
+                ) : (
+                  <Ionicons name="ellipsis-horizontal" size={16} color={colors.text.secondary.hex} />
+                )}
+              </Pressable>
+            )}
           </View>
-          <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex }]} numberOfLines={1}>
-            {typeLabel}
-          </Text>
-          <Text style={[textStyles.label.style, { color: colors.text.muted.hex }]}>
-            {relativeLogTime(log.loggedAt, now)}
-          </Text>
+          {removed ? (
+            <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+              Photo removed
+            </Text>
+          ) : (
+            <>
+              <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex }]} numberOfLines={1}>
+                {typeLabel}
+              </Text>
+              <Text style={[textStyles.label.style, { color: colors.text.muted.hex }]}>
+                {relativeLogTime(log.loggedAt, now)}
+              </Text>
+            </>
+          )}
         </View>
       </View>
-
-      {/* MVP-UI-ONLY reaction chips — inert, no persistence (Phase 2). */}
-      {REACTIONS_MVP_UI_ONLY && (
-        <View style={styles.reactions}>
-          {['🔥', '👏', '❤️', '🙄'].map((r) => (
-            <Pressable key={r} accessibilityRole="button" accessibilityLabel={`React ${r}`} style={styles.reactionChip} hitSlop={4}>
-              <Text style={styles.reactionText}>{r}</Text>
-            </Pressable>
-          ))}
-        </View>
-      )}
 
       <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)}>
         <View style={styles.viewer}>
@@ -97,18 +150,14 @@ const styles = StyleSheet.create({
   },
   right: { flex: 1, gap: spacing.xs * 2, paddingTop: spacing.xs },
   rowTop: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
-  reactions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md + spacing.xs },
-  reactionChip: {
-    height: 28,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
+  author: { flex: 1, color: colors.text.primary.hex },
+  more: {
+    width: 32,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'transparent',
+    marginLeft: spacing.xs,
   },
-  reactionText: { fontSize: 13, lineHeight: 18 },
   viewer: {
     flex: 1,
     backgroundColor: 'rgba(10,12,8,0.96)',

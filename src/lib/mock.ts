@@ -165,6 +165,41 @@ export const devMock = {
     }
   },
 
+  /**
+   * DELETE one dev user's account data (App Store 5.1.1(v) in-app account
+   * deletion — called by accountDeletion.deleteAccount()). Removes ONLY keys
+   * this user owns, so photo isolation stays intact:
+   *   user:<email>, user (legacy — if it points at this user), profile:<id>,
+   *   workouts:<id>, pair:<id>, memberships:<id>, invites:<id>,
+   *   workouts:<partner...> is NEVER touched (partner's data is theirs).
+   * The photo FILE itself is deleted by the caller (accountDeletion.ts dev
+   * folder delete) — this removes the row + account-shape keys.
+   */
+  async deleteUserData(userId: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const user = await this.getUserById(userId);
+      const keys = await AsyncStorage.getAllKeys();
+      const emailKey = user ? `${STORE_PREFIX}user:${user.email}` : null;
+      const legacy = await readValue<SessionUser>('user');
+      for (const key of keys ?? []) {
+        const ownedKey =
+          key === `${STORE_PREFIX}profile:${userId}` ||
+          key === `${STORE_PREFIX}workouts:${userId}` ||
+          key === `${STORE_PREFIX}pair:${userId}` ||
+          key === `${STORE_PREFIX}memberships:${userId}` ||
+          key === `${STORE_PREFIX}invites:${userId}` ||
+          (emailKey !== null && key === emailKey) ||
+          (legacy?.id === userId && key === `${STORE_PREFIX}user`);
+        if (ownedKey) {
+          await AsyncStorage.removeItem(key);
+        }
+      }
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : 'Could not delete account data.' };
+    }
+  },
+
   async listInvites(userId: string): Promise<DevInvite[]> {
     return (await readValue<DevInvite[]>(`invites:${userId}`)) ?? [];
   },

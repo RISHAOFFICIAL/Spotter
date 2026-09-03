@@ -31,7 +31,8 @@ import {
   type DevPhoto,
 } from './workouts';
 
-const DEVMOCK_PHOTOS_DIR = 'spotter-dev-mock-photos';
+/** Cache dir for dev-mode proof photos (one folder per dev user). */
+export const DEVMOCK_PHOTOS_DIR = 'spotter-dev-mock-photos';
 
 // ---------------------------------------------------------------------------
 // IDs + dev photo files
@@ -364,6 +365,78 @@ export async function logWorkout(input: NewWorkout): Promise<LogWorkoutResult> {
     };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : 'Upload failed. Try again.' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Remove one workout (UGC control, compliance brief #2 §5)
+// ---------------------------------------------------------------------------
+
+export interface RemoveWorkoutResult {
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Delete ONE workout proof — OWNER ONLY, hard requirement: the caller must be
+ * the workout's author (auth-uid matching is enforced in REAL mode by RLS on
+ * the `workouts` table; the DEV mock deletes only from the user's OWN key
+ * space + own photo file, so photo isolation is untouched either way).
+ *
+ * DEV: removes the row from `workouts:{userId}` and deletes the local photo
+ * file (per-user cache folder) if the path resolves to one.
+ * REAL: deletes the storage object then the row, both scoped by RLS to
+ * auth.uid() — a partner can never delete someone else's photo.
+ */
+export async function removeWorkout(workoutId: string): Promise<RemoveWorkoutResult> {
+  const session = await getStoredSession();
+  if (!session) return { ok: false, error: 'No session. Sign in first.' };
+
+  if (session.isDevMode || !supabase) {
+    const rows = await devMock.listWorkouts(session.user.id);
+    const idx = rows.findIndex((r) => r.id === workoutId);
+    if (idx < 0) return { ok: false, error: 'That log is already gone.' };
+    const row = rows[idx];
+    rows.splice(idx, 1);
+    await devMock.saveWorkouts(session.user.id, rows);
+    // Delete the local proof file if it lives in this user's dev photo dir
+    // (never touches another user's folder — isolation intact).
+    if (row.photo_path && row.photo_path.includes(`spotter-dev-mock-photos/${session.user.id}/`)) {
+      try {
+        const f = new File(row.photo_path);
+        if (f.exists) f.delete();
+      } catch {
+        // File already missing — row deletion still stands.
+      }
+    }
+    return { ok: true };
+  }
+
+  // REAL mode: delete the private-bucket object (scoped to auth.uid() by the
+  // storage policy) then the row (scoped by workouts RLS). Photo isolation is
+  // preserved: the path is always `${auth.uid()}/...`, so a partner can only
+  // ever reach their OWN objects.
+  try {
+    const { data: row } = await supabase
+      .from('workouts')
+      .select('photo_path')
+      .eq('id', workoutId)
+      .eq('user_id', session.user.id)
+      .maybeSingle();
+    if (!row) return { ok: false, error: 'That log is already gone.' };
+    const { error: storageError } = await supabase.storage
+      .from(WORKOUT_BUCKET)
+      .remove([row.photo_path]);
+    if (storageError) return { ok: false, error: storageError.message };
+    const { error: deleteError } = await supabase
+      .from('workouts')
+      .delete()
+      .eq('id', workoutId)
+      .eq('user_id', session.user.id);
+    if (deleteError) return { ok: false, error: deleteError.message };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Could not remove the log.' };
   }
 }
 

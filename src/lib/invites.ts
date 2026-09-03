@@ -84,19 +84,30 @@ async function writeStoredInviteRef(ref: StoredInviteRef): Promise<void> {
 /** Code the UI shows right now (up to the pre-signup Welcome row and the
  * Profile/invite sheet). In dev, seeding the partner is what makes the mock
  * two-user story exist; real mode persists an invites row (the row id is kept
- * so "Link sent — waiting" survives restarts). No expiry in MVP. */
+ * so "Code sent — waiting" survives restarts). No expiry in MVP.
+ *
+ * Behavior fix (compliance brief #2, spec §1): the code EXISTS pre-signup in
+ * BOTH modes. The token ref is generated + persisted to AsyncStorage BEFORE
+ * any session check, and the display code is formatted from that stored token
+ * — a guest always sees the same code, and post-signup the invites row is
+ * lazily upserted for that SAME token (never regenerated — one stable code). */
 export async function getOrCreateInviteCode(): Promise<InviteInfo> {
+  // 1. Pre-signup capability: one stable token ref, persisted up front so the
+  //    Welcome row always has a code before an account exists (works even when
+  //    the user bails on onboarding — invite-flow.md §1).
+  const stored = await readStoredInviteRef();
+  let token = stored?.token ?? '';
+  if (!token) {
+    token = generateInviteToken();
+    await writeStoredInviteRef({ id: `dev_invite_${token}`, token });
+  }
+
   const session = await getStoredSession();
 
   if (session?.isDevMode || !supabase) {
     // Dev: a pending invite always exists on the user side; partner pre-seeded.
-    const stored = await readStoredInviteRef();
-    let token = stored?.token ?? '';
-    if (!token) {
-      token = generateInviteToken();
-      await writeStoredInviteRef({ id: `dev_invite_${token}`, token });
-    }
-    // Make sure an invites row exists so the accept screen can resolve it.
+    // Make sure an invites row exists so the accept screen can resolve it
+    // (skip when the user has not signed up yet — lazily attached post-signup).
     const userId = session?.user.id;
     if (userId) {
       const rows = await devMock.listInvites(userId);
@@ -117,25 +128,24 @@ export async function getOrCreateInviteCode(): Promise<InviteInfo> {
     return { displayCode: formatDevInviteCode(token), token, isDev: true };
   }
 
-  // REAL mode: one invite row per user+token, idempotent.
+  // REAL mode: one invite row per user+token, idempotent, attached lazily to
+  // the SAME stored token. RLS requires `inviter_id` = auth.uid(), so this
+  // branch only runs once a session exists; the guest pre-signup path above
+  // already handed out a code from the stored token.
   const sessionReal = await getStoredSession();
-  if (!sessionReal?.user.id) return { displayCode: '', token: '', isDev: false };
-  const stored = await readStoredInviteRef();
-  if (stored?.token) {
-    return { displayCode: formatInviteCode(stored.token), token: stored.token, isDev: false };
+  if (sessionReal?.user.id) {
+    const { data, error } = await supabase!
+      .from('invites')
+      .upsert({ inviter_id: sessionReal.user.id, token }, { onConflict: 'token' })
+      .select('id')
+      .single();
+    if (!error && data) {
+      // Row id kept so a future "Code sent — waiting" state can read it back.
+      await writeStoredInviteRef({ id: data.id, token });
+    }
+    // On RLS violation / offline: still hand back the stored code; the row
+    // attaches on the next call (the token never changes).
   }
-  const token = generateInviteToken();
-  const { data, error } = await supabase!
-    .from('invites')
-    .insert({ inviter_id: sessionReal.user.id, token })
-    .select('id')
-    .single();
-  if (error || !data) {
-    // RLS violation or offline — still hand back a code so the Welcome row
-    // pre-generate works; persistence to the invites table happens on retry.
-    return { displayCode: formatInviteCode(token), token, isDev: false };
-  }
-  await writeStoredInviteRef({ id: data.id, token });
   return { displayCode: formatInviteCode(token), token, isDev: false };
 }
 
