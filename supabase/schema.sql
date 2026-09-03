@@ -365,4 +365,108 @@ revoke all on function public.get_invite(text) from public;
 grant execute on function public.get_invite(text) to anon, authenticated;
 revoke all on function public.accept_invite(text) from public;
 grant execute on function public.accept_invite(text) to authenticated;
+
+-- Authenticated ONLY: permanently delete the CURRENT user's account + data
+-- (App Store Guideline 5.1.1(v) — in-app account deletion, real mode).
+-- Runs with the caller's own JWT: auth.uid() IS the subject and there is no
+-- argument, so a user can only ever delete themselves. SECURITY DEFINER so the
+-- function can row-delete auth.users + storage.objects for that uid.
+--
+-- Group handling (pair groups AND any future squad groups):
+--   * If the deleting user is the LAST member of a group → delete the whole
+--     group (only their own data is in it).
+--   * Otherwise → KEEP the group for the remaining members: if the deleting
+--     user was the creator, reassign creator_id to the oldest remaining
+--     member FIRST (groups.creator_id references public.users ON DELETE
+--     CASCADE — leaving it would nuke the group + the partner's membership row
+--     when auth.users disappears), then remove only the deleting user's own
+--     membership row. Other users' rows are never touched.
+--
+-- Photo files: the CLIENT erases the actual bytes first via the Storage API
+-- (storage.remove() under ${auth.uid()}/ — the only path that truly deletes
+-- files; direct SQL row deletion is blocked by the storage.protect_delete()
+-- trigger and would orphan the underlying file even with the flag — see the
+-- "NEVER relax the policies" note above). This RPC then sweeps any remaining
+-- storage.objects metadata rows under the user's prefix as final cleanup
+-- (storage.allow_delete_query is the same session flag the Storage API sets
+-- for its own deletes). Supabase cascade rules remove the rest: deleting the
+-- auth.users row cascades to public.users and, through it, to our workouts,
+-- invites and memberships; Supabase's own auth schema cascades clean up our
+-- identities/sessions/refresh tokens.
+create or replace function public.delete_account()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  my_id uuid := auth.uid();
+  g record;
+  members_left int;
+begin
+  if my_id is null then
+    raise exception 'auth required';
+  end if;
+
+  -- Sweep leftover storage metadata rows under our own prefix (the client
+  -- already removed the underlying files via the Storage API, see above).
+  -- storage.allow_delete_query is the same session flag the Storage API sets
+  -- for its own deletes (storage.protect_delete() rejects direct deletes
+  -- without it). Modern Supabase storage dropped the prefixes table entirely
+  -- (folders are derived from objects at read time); touch it only if the
+  -- project still has it (older storage versions).
+  set local storage.allow_delete_query = 'true';
+  delete from storage.objects
+   where bucket_id = 'workouts'
+     and storage.foldername(name)[1] = my_id::text;
+  if to_regclass('storage.prefixes') is not null then
+    delete from storage.prefixes
+     where bucket_id = 'workouts' and name = my_id::text || '/';
+  end if;
+
+  -- Keep partner groups alive unless we are their last member. Iterate the
+  -- groups we are a member of OR creator of (a creator who already left the
+  -- membership must still hand the group over — otherwise the auth.users
+  -- cascade would delete it out from under the remaining members).
+  for g in
+    select distinct group_id from (
+      select m.group_id from public.memberships m where m.user_id = my_id
+      union
+      select id as group_id from public.groups gr where gr.creator_id = my_id
+    ) mine
+  loop
+    select count(*) into members_left
+      from public.memberships m
+     where m.group_id = g.group_id;
+
+    if members_left <= 1 then
+      -- We are the last member: the group holds only our data — drop it.
+      delete from public.groups where id = g.group_id;
+    else
+      -- The group outlives us: if we created it, hand it to the oldest
+      -- remaining member so the auth.users cascade does not delete it.
+      update public.groups
+         set creator_id = (
+           select m2.user_id
+             from public.memberships m2
+            where m2.group_id = g.group_id
+              and m2.user_id <> my_id
+            order by m2.created_at asc, m2.id asc
+            limit 1
+         )
+       where id = g.group_id and creator_id = my_id;
+      -- Remove only our own seat; remaining members keep theirs.
+      delete from public.memberships
+       where group_id = g.group_id and user_id = my_id;
+    end if;
+  end loop;
+
+  -- Delete the auth user LAST: the FK cascade removes our public.users row,
+  -- our workouts rows, our invites and any leftover memberships.
+  delete from auth.users where id = my_id;
+end;
+$$;
+
+revoke all on function public.delete_account() from public;
+grant execute on function public.delete_account() to authenticated;
 -- ---------------------------------------------------------------------------

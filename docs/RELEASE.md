@@ -233,6 +233,10 @@ Sanity checks before announcing to testers:
   builds).
 - In TestFlight, sign-up with a new email, log one camera workout, and confirm
   the feed and ring work end-to-end.
+- **Account deletion (App Store 5.1.1(v) BLOCKER):** after applying
+  `supabase/schema.sql` to the project, create a **throwaway test account** and
+  verify Delete account (Profile → Delete account → confirm) removes the auth
+  user and their photo logs/files end-to-end before submission.
 
 ### Reverting to DEV MOCK builds
 

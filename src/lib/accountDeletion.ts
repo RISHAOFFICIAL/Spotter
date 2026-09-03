@@ -11,14 +11,16 @@
  * user's sessions, user records, workouts, workout-photo files, profile,
  * pair state, memberships and invites are all removed).
  *
- * REAL MODE: forward-compatible path with clearly-marked TODOs. Calling
- * admin.deleteUser() from the client is intentionally NOT done here (it
- * requires the service_role key, which never ships in the app). The correct
- * production shape — to be wired when Supabase auth/RLS is connected — is a
- * security-definer `delete_account()` RPC (schema.sql) that deletes the
- * auth user, their workouts rows, storage objects and memberships in a
- * transaction, called with the user's own JWT. Until that RPC exists, the
- * REAL branch returns NOT-IMPLEMENTED so the UI never fakes a deletion.
+ * REAL MODE: fully wired against the Supabase backend — no service_role key
+ * is ever needed (nothing secret ships in the app). The photo BYTES are
+ * erased first via the Storage API (`remove()` on the owning user's own
+ * `${uid}/` prefix — the only path that truly deletes files; direct SQL row
+ * deletes are blocked by Storage's guard trigger and would orphan the
+ * underlying file). Then the security-definer `delete_account()` RPC
+ * (schema.sql) deletes the auth user, their workout rows, leftover storage
+ * metadata and memberships in ONE transaction, called with the user's own
+ * JWT. If the photo erase fails, we stop BEFORE the RPC so the account is
+ * never half-deleted — the whole flow is retry-safe.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Directory, File, Paths } from 'expo-file-system';
@@ -26,6 +28,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import { devMock } from './mock';
 import { clearSession, getStoredSession, supabase } from './supabase';
 import { DEVMOCK_PHOTOS_DIR } from './workoutStore';
+import { WORKOUT_BUCKET } from './workouts';
 
 const ACCOUNT_DELETION_KEYS: readonly string[] = ['spotter.invite:v1'];
 
@@ -49,11 +52,32 @@ async function deleteDevPhotosDir(userId: string): Promise<boolean> {
   }
 }
 
+/**
+ * Enumerate the CURRENT user's photo files under their `${userId}/` prefix via
+ * the Storage API. Listing is ground truth (only files that actually exist are
+ * returned), so a retry never tries to remove already-gone objects.
+ */
+async function listOwnPhotoPaths(userId: string): Promise<string[]> {
+  if (!supabase) return [];
+  const { data, error } = await supabase.storage
+    .from(WORKOUT_BUCKET)
+    .list(userId, { limit: 1000, sortBy: { column: 'name', order: 'asc' } });
+  if (error) throw new Error(error.message ?? 'Storage list failed.');
+  return (data ?? [])
+    .filter((f) => !f.name.endsWith('/')) // drop folder rows (their name ends with '/')
+    .map((f) => `${userId}/${f.name}`);
+}
+
 export interface DeleteAccountResult {
   ok: boolean;
   /** Human-readable, honest summary of what happened (or didn't). */
   message: string;
-  /** True when real-mode deletion is stubbed (needs the RPC — see file doc). */
+  /**
+   * True when real-mode deletion could not complete because a required
+   * backend step is unavailable (retry-safe). Retained for contract
+   * compatibility with the pre-RPC stub builds; the wired real branch only
+   * sets it on an infrastructural failure (e.g. Storage unreachable).
+   */
   deferred?: boolean;
 }
 
@@ -88,19 +112,41 @@ export async function deleteAccount(): Promise<DeleteAccountResult> {
   }
 
   // ---- REAL MODE ---------------------------------------------------------
-  // TODO(real-mode): wire a SECURITY-DEFINER `delete_account()` RPC in
-  // supabase/schema.sql (transactional: deletes auth.users row via
-  // `delete from auth.users where id = auth.uid()`, the user's workouts
-  // rows + storage objects + memberships + invites). Call it here with the
-  // user's own JWT:
-  //   const { error } = await supabase.rpc('delete_account');
-  //   if (error) return { ok: false, message: error.message, deferred: true };
-  // Interstitial NOT-IMPLEMENTED until that RPC lands — the UI must never
-  // claim deletion it didn't perform.
-  return {
-    ok: false,
-    message:
-      'Account deletion is not available yet in this build. Your photos stay sealed — you can come back anytime.',
-    deferred: true,
-  };
+  // 1) Erase photo BYTES via the Storage API before touching any rows. The
+  //    owning user's own JWT is enough — the `workouts_storage_delete_own`
+  //    policy (schema.sql) already scopes deletes to the `${uid}/` prefix.
+  //    Any failure here aborts BEFORE the RPC: we never half-delete.
+  try {
+    const paths = await listOwnPhotoPaths(session.user.id);
+    if (paths.length > 0) {
+      const { error } = await supabase.storage.from(WORKOUT_BUCKET).remove(paths);
+      if (error) {
+        return {
+          ok: false,
+          message: "Couldn't delete your photos. Try again.",
+          deferred: true,
+        };
+      }
+    }
+  } catch (e) {
+    return {
+      ok: false,
+      message: e instanceof Error ? e.message : "Couldn't delete your photos. Try again.",
+      deferred: true,
+    };
+  }
+
+  // 2) delete_account() RPC: transactional removal of the auth user (FK
+  //    cascade wipes our public.users, workouts, invites + memberships),
+  //    group handling (partner groups survive unless we were the last
+  //    member), and a sweep of any leftover storage metadata rows.
+  const { error } = await supabase.rpc('delete_account');
+  if (error) {
+    return { ok: false, message: error.message ?? "Couldn't delete your account. Try again." };
+  }
+
+  // 3) Real deletion completed — clear the local session + leftover keys.
+  await clearSession();
+  for (const k of ACCOUNT_DELETION_KEYS) await removeLocalKey(k);
+  return { ok: true, message: 'Account deleted. Sorry to see you go.' };
 }

@@ -207,6 +207,11 @@ export interface Database {
         Args: { p_token: string };
         Returns: Json;
       };
+      /** Authenticated only: permanently delete the current auth.uid()'s account + data (App Store 5.1.1(v)). */
+      delete_account: {
+        Args: Record<PropertyKey, never>;
+        Returns: undefined;
+      };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;
