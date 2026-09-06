@@ -83,12 +83,20 @@ export async function commitOnboarding(settings: OnboardingSettings): Promise<{ 
       });
       if (userError) return { ok: false, error: userError.message };
 
-      const { error: memberError } = await supabase!.from('memberships').upsert({
-        user_id: userId,
-        group_id: groupId,
-        weekly_goal: settings.weeklyGoal,
-        role: 'admin',
-      });
+      // `unique (group_id, user_id)` exists in schema.sql — without
+      // onConflict a re-onboarding (commitOnboarding on an already-committed
+      // user) would violate it (D6). The upsert targets the pair (group,user)
+      // and updates the goal/role in place, matching the dev-mock semantics
+      // (addDevMembership replaces the existing membership for the group).
+      const { error: memberError } = await supabase!.from('memberships').upsert(
+        {
+          user_id: userId,
+          group_id: groupId,
+          weekly_goal: settings.weeklyGoal,
+          role: 'admin',
+        },
+        { onConflict: 'group_id,user_id' },
+      );
       if (memberError) return { ok: false, error: memberError.message };
       return { ok: true };
     } catch (e) {
