@@ -20,6 +20,7 @@ const FILES = [
   'src/lib/settings.ts',
   'src/lib/storage.ts',
   'src/lib/workoutStore.ts',
+  'src/lib/naming.ts',
 ];
 
 function stripUnused(moduleMap) {

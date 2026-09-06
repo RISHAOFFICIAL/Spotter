@@ -62,12 +62,14 @@ const model = {
   invites: require(path.join(compRoot, 'invites.js')),
   workouts: require(path.join(compRoot, 'workouts.js')),
   settings: require(path.join(compRoot, 'settings.js')),
+  naming: require(path.join(compRoot, 'naming.js')),
 };
 const { devMock, DEV_PAIR_GROUP_ID } = model.mock;
 const { authenticate, getStoredSession } = model.supabase;
 const { fetchWeeklyContext, logWorkout } = model.workoutStore;
 const { getOrCreateInviteCode, lookupInvite, acceptInvite } = model.invites;
 const { commitOnboarding } = model.settings;
+const { setPetName, getPetName, setTeamName } = model.naming;
 
 console.log(`SPOTTER MVP two-user smoke test (dev mock)  [${RUN_ID}]`);
 console.log('');
@@ -184,6 +186,47 @@ await step('h. Solo-mode invite banner state flips to paired after accept', asyn
   // home-screen.md §3: the banner renders only when hasPartner === false, so
   // the context flip is exactly what unmounts the banner.
   console.log(`        hasPartner=true, partner=${ctx.context.partner?.firstName}`);
+});
+
+await step('i. Naming: pet name overrides partner label locally; team name shared on pair group', async () => {
+  // Session is A (re-authed in step g). A's partner is B (bri.smoke).
+  // A) Pet name (local-only): what A calls B, shown to A only.
+  await setPetName('Coach');
+  ok((await getPetName()) === 'Coach', 'pet name did not persist');
+
+  let ctx = await fetchWeeklyContext();
+  ok(ctx.context.partnerDisplayName === 'Coach', `partnerDisplayName=${ctx.context.partnerDisplayName} (expected Coach)`);
+  ok(ctx.context.partner?.firstName === 'bri.smoke', 'partner.firstName must stay the REAL name');
+  // Partner (B) feed-card author label uses the pet name; own (A) keeps own name.
+  const bLog = ctx.context.logs.find((l) => l.userId === userB.id);
+  const aLog = ctx.context.logs.find((l) => l.userId === userA.id);
+  ok(bLog && bLog.authorName === 'Coach', `B feed author=${bLog?.authorName} (expected Coach)`);
+  ok(aLog && aLog.authorName === 'alex.smoke', `A feed author=${aLog?.authorName} (expected own name alex.smoke)`);
+  ok(ctx.context.teamName === null, 'teamName should be null before set');
+
+  // B) Team name (shared on the pair group).
+  const teamRes = await setTeamName('Team Us');
+  ok(teamRes.ok, `setTeamName failed: ${teamRes.error}`);
+  ctx = await fetchWeeklyContext();
+  ok(ctx.context.teamName === 'Team Us', `teamName=${ctx.context.teamName} (expected Team Us)`);
+
+  // Fallback: clearing the pet name returns partner label to the real name.
+  await setPetName('');
+  ctx = await fetchWeeklyContext();
+  ok(ctx.context.partnerDisplayName === 'bri.smoke', `cleared pet name → ${ctx.context.partnerDisplayName} (expected bri.smoke)`);
+  ok(ctx.context.teamName === 'Team Us', 'team name should persist after clearing pet name');
+
+  // Local-only isolation: B does NOT see A's pet name, but DOES see the team name.
+  const resB = await authenticate(B_EMAIL, 'pass5678');
+  ok(resB.ok, `re-auth B failed: ${resB.error}`);
+  const ctxB = await fetchWeeklyContext();
+  ok(ctxB.context.partnerDisplayName === 'alex.smoke', `B partnerDisplayName=${ctxB.context.partnerDisplayName} (expected alex.smoke — no pet name set for B)`);
+  ok(ctxB.context.teamName === 'Team Us', `B teamName=${ctxB.context.teamName} (expected shared Team Us)`);
+
+  // Restore session A + clear the team name so a re-run starts clean.
+  await authenticate(A_EMAIL, 'pass1234');
+  await setTeamName('');
+  console.log(`        pet name "Coach" → local override; team "Team Us" → shared header`);
 });
 
 console.log('');
