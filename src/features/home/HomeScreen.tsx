@@ -203,7 +203,7 @@ export default function HomeScreen() {
               <Text style={[textStyles.label.style, styles.feedHeader]}>RECENT</Text>
               {hasPartner && partnerFirstName ? (
                 <Text style={[textStyles.label.style, { color: colors.text.muted.hex }]}>
-                  just you & {partnerFirstName}
+                  Paired with {partnerFirstName}
                 </Text>
               ) : null}
             </View>
@@ -228,7 +228,7 @@ export default function HomeScreen() {
       {/* Bottom bar — pinned; camera is the fixed primary action. Home is already the active screen, so the Home slot is a no-op. */}
       <BottomBar onHome={() => {}} onCamera={() => setLogOpen(true)} weekCount={weekCount} />
 
-      <LogSheet visible={logOpen} onClose={() => setLogOpen(false)} onLogged={handleLogged} />
+      <LogSheet visible={logOpen} onClose={() => setLogOpen(false)} onLogged={handleLogged} partnerName={partnerFirstName} />
       <InviteSheet visible={inviteOpen} onClose={() => setInviteOpen(false)} />
 
       {/* In-app welcome toast after accepting (one-time; push is out of MVP scope). */}

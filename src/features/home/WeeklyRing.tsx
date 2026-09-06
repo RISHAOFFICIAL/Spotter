@@ -1,6 +1,7 @@
 /**
  * WeeklyRing — the star of Home (home-screen.md §2). Display-only, never a
- * button. Ring numeral (N/G) with "DAYS THIS WEEK" label, volt progress
+ * button. Ring numeral (N/G) with "MY WEEK" label (personal ring — see §8 of
+ * the design README; a user's ring counts only their own logs), volt progress
  * (success) that animates 400ms per log (motion.ringFillMs), track white @
  * 10%. Turns danger red ONLY after the week ends unmet (design README #8 —
  * nudge, don't shame). Single source: the weekly-context count from
@@ -111,7 +112,7 @@ export function WeeklyRing({ count, goal, weekEndedUnmet }: { count: number; goa
             {numeral}
           </Text>
           <Text style={[textStyles.label.style, { color: colors.text.secondary.hex, marginTop: spacing.xs }]}>
-            DAYS THIS WEEK
+            MY WEEK
           </Text>
         </View>
       </View>
