@@ -13,7 +13,8 @@
       "bundleIdentifier": "app.spotter.mvp",
       "buildNumber": "1",
       "infoPlist": {
-        "NSCameraUsageDescription": "SPOTTER uses your camera to capture photo proof of your workouts. Photos are sealed to your account — only you and your partner can ever see them."
+        "NSCameraUsageDescription": "SPOTTER uses your camera to capture photo proof of your workouts. Photos are sealed to your account — only you and your partner can ever see them.",
+        "NSUserNotificationsUsageDescription": "SPOTTER lets you know when your partner logs a workout and when your invite is accepted. You control every notification type."
       }
     },
     "android": {
@@ -32,6 +33,15 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/generated/icons/android/mipmap-xxxhdpi/ic_launcher_monochrome.png",
+          "color": "#0A0C08",
+          "defaultChannel": "spotter-pair",
+          "mode": "development"
+        }
+      ],
       [
         "expo-splash-screen",
         {
