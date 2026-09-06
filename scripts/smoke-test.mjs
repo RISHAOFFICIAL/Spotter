@@ -74,7 +74,7 @@ const { getOrCreateInviteCode, lookupInvite, acceptInvite, unpair } = model.invi
 const { commitOnboarding } = model.settings;
 const { setPetName, getPetName, setTeamName } = model.naming;
 const { finalizePreviousWeek } = model.weeklyResults;
-const { getMissPromise, setMissPromise } = model.missPromise;
+const { getMissPromise, setMissPromise, hasSeenMissPrompt, markMissPromptSeen, clearMissPromptSeen } = model.missPromise;
 
 console.log(`SPOTTER MVP two-user smoke test (dev mock)  [${RUN_ID}]`);
 console.log('');
@@ -391,6 +391,80 @@ await step('l. Miss promise: set (40 chars) → missed previous week → own-mis
   ok(ctxSolo.ok && ctxSolo.context.missLine === null, 'solo A should have no own-miss line after unpair');
 
   console.log(`        promise "${PROMISE}" → own-miss line set; B (no promise) none; unpair clears`);
+});
+
+await step('m. Partner MissCard: B missed last week + B promise → A feed card state; prompted-flag skip-flow', async () => {
+  // Step l ended with A solo (unpaired). Re-pair A+B with a FRESH code
+  // (step-j pattern) so the M-slice pair read has a pair group to see.
+  // Session is still A here (restored at the end of step l).
+  const resAuthAm = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthAm.ok, `re-auth A (step m) failed: ${resAuthAm.error}`);
+  await removeItem('spotter.invite:v1');
+  const freshM = await getOrCreateInviteCode();
+  ok(/^DEV-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(freshM.displayCode), `fresh code format: ${freshM.displayCode}`);
+  const resAuthBm = await authenticate(B_EMAIL, 'pass5678');
+  ok(resAuthBm.ok, `re-auth B (accept, step m) failed: ${resAuthBm.error}`);
+  const accM = await acceptInvite(freshM.displayCode);
+  ok(accM.ok, `re-pair accept failed: ${accM.error}`);
+  const resAuthA7 = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthA7.ok, `re-auth A (post-pair, step m) failed: ${resAuthA7.error}`);
+  const ctxM0 = await fetchWeeklyContext();
+  ok(ctxM0.ok && ctxM0.context.hasPartner === true, 'A should be paired at step m start');
+  const partnerId = ctxM0.context.partner?.id;
+  ok(partnerId === userB.id, `partner id = ${partnerId} (expected B)`);
+
+  // 1) B sets their OWN promise (the M card surfaces the PARTNER's note).
+  const B_PROMISE = 'I owe you a long run plus your favorite snack';
+  ok(B_PROMISE.length <= 80, `B promise length = ${B_PROMISE.length}`);
+  const resAuthB4 = await authenticate(B_EMAIL, 'pass5678');
+  ok(resAuthB4.ok, `re-auth B (set promise) failed: ${resAuthB4.error}`);
+  const setB = await setMissPromise(B_PROMISE);
+  ok(setB.ok, `B setMissPromise failed: ${setB.error}`);
+  ok((await getMissPromise()) === B_PROMISE, 'B promise not readable via getter');
+
+  // 2) Prompted-flag skip-flow (lib-level, dev+real parity): unset → prompt
+  //    allowed; flagged (Skip OR Save) → re-show suppressed; cleared → re-armed.
+  await clearMissPromptSeen();
+  ok((await hasSeenMissPrompt()) === false, 'prompt should be allowed when the flag is unset');
+  await markMissPromptSeen();
+  ok((await hasSeenMissPrompt()) === true, 'flagged → re-show must be suppressed');
+  await clearMissPromptSeen();
+  ok((await hasSeenMissPrompt()) === false, 'cleared flag → prompt re-armed (harness re-runs)');
+
+  // 3) Fixture B's MISSED previous week (step-k/l time-travel): 8 days past the
+  //    current week start makes the week containing B's step-f log fully
+  //    elapsed; B has 1 log < goal 3 → missed. finalizePreviousWeek writes the
+  //    snapshot under the SESSION user, so run the fixture AS B; use B's OWN
+  //    effective week day and goal (B never onboarded: stored day falls back to
+  //    'Mon', invitee goal is 3 from accept) — matching exactly what
+  //    wasPreviousWeekMissedFor computes for the PARTNER at real-now, so the
+  //    finalized snapshot is what the MissCard reads. Clear B's results first
+  //    so the fixture writes a fresh snapshot row (no-op otherwise).
+  const resAuthBfix = await authenticate(B_EMAIL, 'pass5678');
+  ok(resAuthBfix.ok, `re-auth B (fixture) failed: ${resAuthBfix.error}`);
+  const bDay = 'Mon'; // B's stored-day fallback (B never onboarded a week-start)
+  const bGoal = 3; // B never onboarded; invitee default goal (step e) is 3
+  await devMock.clearResults(userB.id);
+  const curStartB = weekStartFor(new Date(), bDay);
+  const elapsedNowB = new Date(curStartB.getTime() + 8 * 24 * 60 * 60 * 1000);
+  const fixB = await finalizePreviousWeek(elapsedNowB, bDay, bGoal, DEV_PAIR_GROUP_ID);
+  ok(fixB.ok, `B missed-week fixture failed: ${fixB.error}`);
+  ok(fixB.result !== undefined && fixB.result.completed === false, 'B fixture snapshot should record a MISSED week');
+
+  // 4) A's real-now weekly context must expose the partner MissCard (partner
+  //    missed THEIR previous week AND their promise exists).
+  const resAuthA9 = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthA9.ok, `re-auth A (assert) failed: ${resAuthA9.error}`);
+  const ctxM = await fetchWeeklyContext();
+  ok(ctxM.ok, 'fetchWeeklyContext failed at step m assert');
+  ok(ctxM.context.partnerMissCard?.kind === 'partnerMiss', 'partner MissCard missing (B missed + B promise)');
+  ok(ctxM.context.partnerMissCard?.promise === B_PROMISE, `partner MissCard promise mismatch: ${ctxM.context.partnerMissCard?.promise}`);
+
+  // 5) A's OWN missLine stays null: A set no promise in this run (only B did),
+  //    so A must not get a MissCard/line about themselves.
+  ok(ctxM.context.missLine === null, 'A should have no own-miss line (A set no promise)');
+
+  console.log(`        B missed + promise → A sees MissCard; prompted-flag unset→suppressed→re-armed`);
 });
 
 console.log('');
