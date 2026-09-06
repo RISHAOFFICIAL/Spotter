@@ -12,7 +12,7 @@
  * after the deletion actually completed — no fake delete.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -23,6 +23,13 @@ import { deleteAccount } from '@/lib/accountDeletion';
 import { unpair } from '@/lib/invites';
 import { getMissPromise, setMissPromise, MISS_PROMISE_MAX } from '@/lib/missPromise';
 import { getPetName, setPetName, setTeamName } from '@/lib/naming';
+import {
+  getNotificationPrefs,
+  setNotificationPref,
+  NOTIFICATION_TYPES,
+  NOTIFICATION_META,
+  type NotificationPrefs,
+} from '@/lib/notificationPrefs';
 import { fetchWeeklyContext } from '@/lib/workoutStore';
 import { colors, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
@@ -54,6 +61,13 @@ export function ProfileScreen() {
   const [missPromise, setMissPromiseValue] = useState('');
   const [missPromiseBusy, setMissPromiseBusy] = useState(false);
 
+  // Notification preferences (v1.1 Build #3, slice 1): the four push types as
+  // per-user toggles. Reads once on mount; each flip writes through the lib
+  // (lazy defaults row; own-row RLS in real mode, devMock parity in dev).
+  const [notifPrefs, setNotifPrefs] = useState<NotificationPrefs | null>(null);
+  const [notifError, setNotifError] = useState<string | null>(null);
+  const [notifBusy, setNotifBusy] = useState(false);
+
   // Unpair (compliance: stop receiving partner UGC). Two-tap confirm: the
   // first tap flips the label to "Tap again to confirm" for 3s; a second tap
   // inside that window runs unpair(). No new screens.
@@ -81,6 +95,12 @@ export function ProfileScreen() {
       setPetNameValue(pet ?? '');
       setMissPromiseValue(miss ?? '');
     })();
+    // Notification prefs load (v1.1 Build #3): independent of pairing — the
+    // toggles mirror the schema defaults even before a row exists.
+    void getNotificationPrefs().then((prefs) => {
+      if (!mounted) return;
+      setNotifPrefs(prefs);
+    });
     return () => {
       mounted = false;
       if (confirmTimer.current) clearTimeout(confirmTimer.current);
@@ -107,6 +127,23 @@ export function ProfileScreen() {
     if (res.ok) setMissPromiseValue(text);
     setMissPromiseBusy(false);
     setMessage(res.ok ? 'Saved. This shows only if you miss the week.' : (res.error ?? 'Could not save.'));
+  };
+
+  // Flip ONE notification toggle (v1.1 Build #3). Optimistic local flip +
+  // truthful restore on write failure — the toggle never silently lies.
+  const toggleNotif = async (type: keyof NotificationPrefs, enabled: boolean) => {
+    if (notifBusy || !notifPrefs) return;
+    setNotifBusy(true);
+    setNotifError(null);
+    const next = { ...notifPrefs, [type]: enabled };
+    setNotifPrefs(next);
+    const res = await setNotificationPref(type, enabled);
+    setNotifBusy(false);
+    if (!res.ok) {
+      // Restore the prior truthful value + surface the failure.
+      setNotifPrefs((prev) => (prev ? { ...prev, [type]: !enabled } : prev));
+      setNotifError(res.error ?? 'Could not save. Try again.');
+    }
   };
 
   // Two-tap confirm: first tap arms the confirm for 3s, second tap executes.
@@ -277,6 +314,43 @@ export function ProfileScreen() {
           )}
         </View>
 
+        {/* Notification preferences (v1.1 Build #3) — muted switches matching
+            the DANGER ZONE aesthetics (quiet, no volt fills). The four push
+            types are the ONLY ones that exist; copy is honest (missed-week
+            stays OFF by default — the toggle IS the control). */}
+        <Text style={[textStyles.label.style, { color: colors.text.muted.hex, marginTop: spacing.xxxl }]}>NOTIFICATIONS</Text>
+        <View style={styles.card}>
+          {notifPrefs ? (
+            NOTIFICATION_TYPES.map((type) => {
+              const meta = NOTIFICATION_META[type];
+              return (
+                <View key={type} style={styles.notifRow}>
+                  <View style={styles.notifCopy}>
+                    <Text style={[textStyles.captionStrong.style, { color: colors.text.primary.hex }]}>{meta.label}</Text>
+                    <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>{meta.caption}</Text>
+                  </View>
+                  <Switch
+                    value={notifPrefs[type]}
+                    onValueChange={(v) => void toggleNotif(type, v)}
+                    disabled={notifBusy}
+                    trackColor={{ false: colors.background.overlay.hex, true: colors.status.success.hex }}
+                    thumbColor={notifPrefs[type] ? colors.text.onVolt.hex : colors.text.muted.hex}
+                    accessibilityLabel={`${meta.label} notifications`}
+                  />
+                </View>
+              );
+            })
+          ) : (
+            <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>Loading…</Text>
+          )}
+          {notifError && (
+            <Text style={[textStyles.caption.style, { color: colors.text.danger.hex }]}>{notifError}</Text>
+          )}
+          <Text style={[textStyles.caption.style, { color: colors.text.muted.hex, marginTop: spacing.xs }]}>
+            Off until you turn them on. You can change these anytime.
+          </Text>
+        </View>
+
         {/* Danger zone — discoverable, honest, not hidden. */}
         <Text style={[textStyles.label.style, { color: colors.text.muted.hex, marginTop: spacing.xxxl }]}>DANGER ZONE</Text>
         <View style={styles.card}>
@@ -352,6 +426,8 @@ const styles = StyleSheet.create({
   dangerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   unpairRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.md },
   missRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, marginTop: spacing.sm },
+  notifRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.lg, paddingVertical: spacing.xs },
+  notifCopy: { flex: 1, gap: 2 },
   input: {
     height: 48,
     borderRadius: radius.md,

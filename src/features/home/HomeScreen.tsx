@@ -25,7 +25,9 @@ import { FeedCard } from '@/features/home/FeedCard';
 import { EmptyState, InviteBanner, type EmptyCase } from '@/features/home/EmptyState';
 import { InviteSheet } from '@/features/invites/InviteSheet';
 import { MissSetupSheet } from '@/features/invites/MissSetupSheet';
+import { NotificationsSheet } from '@/features/invites/NotificationsSheet';
 import { hasSeenMissPrompt } from '@/lib/missPromise';
+import { shouldAskNotificationPermission, refreshPushRegistrationIfGranted } from '@/lib/notifications';
 import { colors, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
 import { fetchWeeklyContext } from '@/lib/workoutStore';
@@ -57,6 +59,15 @@ export default function HomeScreen() {
   // it to a single showing; Skip never re-asks.
   const [missSheetOpen, setMissSheetOpen] = useState(false);
   const wasPaired = useRef(false);
+  // V1.1 Build #3 (slice 1): notification explainer — the natural moment is
+  // AFTER pairing AND the first return visit to Home (documented in
+  // notifications.ts). It must never appear at first open (or before the user
+  // has a pair to be notified about). `foregroundLoadDone` (a REF — never a
+  // state, so load's identity stays stable) flips once a non-background load
+  // has resolved; the ask effect below then fires once paired.
+  const [notifSheetOpen, setNotifSheetOpen] = useState(false);
+  const notifAsked = useRef(false);
+  const foregroundLoadDone = useRef(false);
 
   // In-app welcome toast after a fresh accept (invite-flow.md §5: one-time,
   // above the bottom bar — push notifications are out of MVP scope).
@@ -100,11 +111,33 @@ export default function HomeScreen() {
     } else {
       wasPaired.current = false;
     }
+    // A foreground (non-background) load has completed — the "return visit"
+    // marker for the notification ask (ref, not state: keeps load stable).
+    if (!background) foregroundLoadDone.current = true;
   }, []);
+
+  // V1.1 Build #3 (slice 1) — natural ask moment, in its OWN effect so `load`
+  // stays dependency-free: after a foreground load resolved AND the user is
+  // paired AND the pairing-time miss sheet (Build #2) is gone (or was never
+  // shown), check the permission machine once per mount. shouldAsk handles
+  // unseen (first ask) and the single re-ask after the long cooldown.
+  useEffect(() => {
+    if (!foregroundLoadDone.current || !ctx?.hasPartner) return;
+    if (missSheetOpen) return;
+    if (notifAsked.current) return;
+    notifAsked.current = true;
+    void shouldAskNotificationPermission().then((ask) => {
+      if (ask && mounted.current) setNotifSheetOpen(true);
+    });
+  }, [ctx, missSheetOpen]);
 
   useEffect(() => {
     mounted.current = true;
     load();
+    // V1.1 Build #3 (slice 1): when the OS permission was already granted on a
+    // previous launch, re-read + re-register the push token so a rotated/
+    // expired token refreshes on every app start. Best-effort + idempotent.
+    void refreshPushRegistrationIfGranted();
     // keep relative timestamps fresh (cheap; not a second fetch — just re-render)
     const t = setInterval(() => setNow(new Date()), 60000);
     return () => {
@@ -325,6 +358,13 @@ export default function HomeScreen() {
           // A saved note changes the own-miss surface — refresh quietly so a
           // later miss renders it without a manual pull.
           void load(true);
+        }}
+      />
+      <NotificationsSheet
+        visible={notifSheetOpen}
+        partnerFirstName={partnerFirstName ?? null}
+        onDone={() => {
+          setNotifSheetOpen(false);
         }}
       />
 
