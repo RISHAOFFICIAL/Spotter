@@ -211,6 +211,11 @@ export interface Database {
         Args: { p_token: string };
         Returns: Json;
       };
+      /** Authenticated: unpair the current auth.uid() from their 2-member pair group (both sides return to solo). */
+      unpair: {
+        Args: Record<PropertyKey, never>;
+        Returns: Json;
+      };
       /** Authenticated only: permanently delete the current auth.uid()'s account + data (App Store 5.1.1(v)). */
       delete_account: {
         Args: Record<PropertyKey, never>;

@@ -11,6 +11,11 @@
 -- MUST apply that ALTER before running a build that reads groups.team_name
 -- (the matching client code is in src/lib/naming.ts + workoutStore.ts). The
 -- pet name is LOCAL-ONLY (AsyncStorage) and needs no schema change.
+--
+-- UNPAIR FEATURE (App Store 5.1.1(v): users must be able to stop receiving
+-- partner UGC): this file adds a `public.unpair()` RPC (additive, no table/
+-- policy changes). Existing/live projects MUST apply that CREATE FUNCTION
+-- before running a build that calls it (client code in src/lib/invites.ts).
 
 -- users: 1:1 with auth.users (id = auth.uid())
 create table if not exists public.users (
@@ -380,6 +385,48 @@ revoke all on function public.get_invite(text) from public;
 grant execute on function public.get_invite(text) to anon, authenticated;
 revoke all on function public.accept_invite(text) from public;
 grant execute on function public.accept_invite(text) to authenticated;
+
+-- Authenticated: unpair the CURRENT auth.uid() from their 2-member pair group.
+-- Both sides return to solo (their personal "Personal" group + workout rows are
+-- untouched). This is the UGC "stop receiving partner content" control: once
+-- both memberships of the pair group are gone, the pair-scoped READ policies
+-- (`workouts_select_pair`, `workouts_storage_read_pair`) no longer match, so
+-- the ex-partner's photos and storage objects are sealed again immediately.
+-- SECURITY DEFINER (so a member can delete the OTHER seat's membership row,
+-- which `memberships_delete_own` alone would forbid) + no argument (a user can
+-- only ever unpair THEMSELVES). Idempotent: already-solo → no-op, still ok.
+create or replace function public.unpair()
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  my_id uuid := auth.uid();
+  pair_group_id uuid;
+begin
+  if my_id is null then
+    raise exception 'auth required';
+  end if;
+
+  -- My 2-member pair group (the "Personal" solo group has 1 member and is
+  -- ignored). Only the pair group is dissolved; personal data stays put.
+  select mine.group_id into pair_group_id
+  from public.memberships mine
+  where mine.user_id = my_id
+    and (select count(*) from public.memberships m where m.group_id = mine.group_id) = 2
+  limit 1;
+
+  if pair_group_id is not null then
+    delete from public.memberships where group_id = pair_group_id;
+  end if;
+
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
+revoke all on function public.unpair() from public;
+grant execute on function public.unpair() to authenticated;
 
 -- Authenticated ONLY: permanently delete the CURRENT user's account + data
 -- (App Store Guideline 5.1.1(v) — in-app account deletion, real mode).

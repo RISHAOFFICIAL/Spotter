@@ -39,7 +39,7 @@ if (compileRes.status !== 0) {
 
 // 2. Module stubs for RN-only deps BEFORE requiring app modules
 const { map } = require(path.join(__dirname, 'smoke', '.compiled', '_deps.json'));
-const { setPrefix, clearAll } = require(path.join(__dirname, 'smoke', 'async-storage.js'));
+const { setPrefix, clearAll, removeItem } = require(path.join(__dirname, 'smoke', 'async-storage.js'));
 const fsMod = require(path.join(__dirname, 'smoke', 'expo-file-system.js'));
 
 const RUN_ID = `run-${Date.now().toString(36)}`;
@@ -67,7 +67,7 @@ const model = {
 const { devMock, DEV_PAIR_GROUP_ID } = model.mock;
 const { authenticate, getStoredSession } = model.supabase;
 const { fetchWeeklyContext, logWorkout } = model.workoutStore;
-const { getOrCreateInviteCode, lookupInvite, acceptInvite } = model.invites;
+const { getOrCreateInviteCode, lookupInvite, acceptInvite, unpair } = model.invites;
 const { commitOnboarding } = model.settings;
 const { setPetName, getPetName, setTeamName } = model.naming;
 
@@ -227,6 +227,70 @@ await step('i. Naming: pet name overrides partner label locally; team name share
   await authenticate(A_EMAIL, 'pass1234');
   await setTeamName('');
   console.log(`        pet name "Coach" → local override; team "Team Us" → shared header`);
+});
+
+await step('j. Unpair: both sides return to solo, own logs intact, re-pair works with a fresh code', async () => {
+  // Session is A (restored at the end of step i). A and B are paired; A has
+  // its own log (step c), B has its own (step f). Clear A's local pet-name
+  // override so the solo→pair→unpair assertions read real names only.
+  await setPetName('');
+
+  // Confirm A still sees the pair before unpairing (sanity baseline).
+  let ctx = await fetchWeeklyContext();
+  ok(ctx.context.hasPartner === true, 'A should be paired before unpair');
+  const aLogsBefore = await devMock.listWorkouts(userA.id);
+  const bLogsBefore = await devMock.listWorkouts(userB.id);
+  ok(aLogsBefore.length === 1, `A logs before unpair = ${aLogsBefore.length} (expected 1)`);
+  ok(bLogsBefore.length === 1, `B logs before unpair = ${bLogsBefore.length} (expected 1)`);
+
+  // Unpair as A.
+  const res = await unpair();
+  ok(res.ok, `unpair failed: ${res.error}`);
+
+  // A is solo: hasPartner=false, no pair memberships, partner state reset.
+  ctx = await fetchWeeklyContext();
+  ok(ctx.context.hasPartner === false, 'A hasPartner should be false after unpair');
+  ok(ctx.context.partner === null, 'A partner should be null after unpair');
+  const memA = await devMock.getDevMemberships(userA.id);
+  ok(!memA.some((m) => m.group_id === DEV_PAIR_GROUP_ID), 'A pair membership not removed');
+
+  // B is solo too (both memberships of the pair group deleted).
+  const memB = await devMock.getDevMemberships(userB.id);
+  ok(!memB.some((m) => m.group_id === DEV_PAIR_GROUP_ID), 'B pair membership not removed');
+  const stateB = await devMock.getPairState(userB.id);
+  ok(stateB.accepted === false && stateB.partner === null, 'B pair state not reset to solo');
+
+  // Own workout logs survive (photos stay per-user isolated); team name cleared.
+  ok((await devMock.listWorkouts(userA.id)).length === 1, 'A logs lost after unpair');
+  ok((await devMock.listWorkouts(userB.id)).length === 1, 'B logs lost after unpair');
+  ok((await devMock.getTeamName()) === null, 'shared team name should clear on unpair');
+
+  // Idempotent: unpairing again when already solo is a harmless no-op.
+  const res2 = await unpair();
+  ok(res2.ok, `second unpair should be a no-op ok: ${res2.error}`);
+
+  // Re-pair with a FRESH code: clear the persisted invite ref so A generates a
+  // new token, then B accepts A's new code.
+  await removeItem('spotter.invite:v1');
+  const resAuthA2 = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthA2.ok, `re-auth A failed: ${resAuthA2.error}`);
+  const fresh = await getOrCreateInviteCode();
+  ok(/^DEV-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(fresh.displayCode), `fresh code format: ${fresh.displayCode}`);
+  ok(fresh.token.length === 8, `fresh token length ${fresh.token.length}`);
+
+  // B accepts A's fresh code.
+  const resAuthB2 = await authenticate(B_EMAIL, 'pass5678');
+  ok(resAuthB2.ok, `re-auth B (accept) failed: ${resAuthB2.error}`);
+  const acc = await acceptInvite(fresh.displayCode);
+  ok(acc.ok, `re-pair accept failed: ${acc.error}`);
+
+  const resAuthA3 = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthA3.ok, `re-auth A (post-pair) failed: ${resAuthA3.error}`);
+  const ctxA = await fetchWeeklyContext();
+  ok(ctxA.context.hasPartner === true, 'A should be re-paired after fresh accept');
+  ok(ctxA.context.partner?.id === userB.id, `A partner after re-pair = ${ctxA.context.partner?.id}`);
+
+  console.log(`        A+B unpair → both solo, logs kept, fresh-code re-pair works`);
 });
 
 console.log('');

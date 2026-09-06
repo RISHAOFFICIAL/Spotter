@@ -11,15 +11,16 @@
  * The success message ("Account deleted. Sorry to see you go.") shows only
  * after the deletion actually completed — no fake delete.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/features/auth/AuthProvider';
-import { AppButton } from '@/components/AppButton';
+import { AppButton, TextButton } from '@/components/AppButton';
 import { deleteAccount } from '@/lib/accountDeletion';
+import { unpair } from '@/lib/invites';
 import { getPetName, setPetName, setTeamName } from '@/lib/naming';
 import { fetchWeeklyContext } from '@/lib/workoutStore';
 import { colors, radius, spacing } from '@/theme/tokens';
@@ -45,6 +46,20 @@ export function ProfileScreen() {
   const [teamNameValue, setTeamNameValue] = useState('');
   const [namingBusy, setNamingBusy] = useState(false);
 
+  // Unpair (compliance: stop receiving partner UGC). Two-tap confirm: the
+  // first tap flips the label to "Tap again to confirm" for 3s; a second tap
+  // inside that window runs unpair(). No new screens.
+  const [confirmUnpair, setConfirmUnpair] = useState(false);
+  const [unpairBusy, setUnpairBusy] = useState(false);
+  const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const loadNaming = async () => {
+    const [ctx, pet] = await Promise.all([fetchWeeklyContext(), getPetName()]);
+    setPartnerFirstName(ctx.ok && ctx.context?.hasPartner ? (ctx.context.partner?.firstName ?? null) : null);
+    setTeamNameValue(ctx.ok ? (ctx.context?.teamName ?? '') : '');
+    setPetNameValue(pet ?? '');
+  };
+
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -58,6 +73,7 @@ export function ProfileScreen() {
     })();
     return () => {
       mounted = false;
+      if (confirmTimer.current) clearTimeout(confirmTimer.current);
     };
   }, []);
 
@@ -69,6 +85,36 @@ export function ProfileScreen() {
     const teamRes = await setTeamName(teamNameValue);
     setNamingBusy(false);
     setMessage(teamRes.ok ? 'Saved.' : (teamRes.error ?? 'Saved.'));
+  };
+
+  // Two-tap confirm: first tap arms the confirm for 3s, second tap executes.
+  const handleUnpairTap = () => {
+    if (unpairBusy) return;
+    if (!confirmUnpair) {
+      setConfirmUnpair(true);
+      if (confirmTimer.current) clearTimeout(confirmTimer.current);
+      confirmTimer.current = setTimeout(() => setConfirmUnpair(false), 3000);
+      return;
+    }
+    if (confirmTimer.current) clearTimeout(confirmTimer.current);
+    setConfirmUnpair(false);
+    void runUnpair();
+  };
+
+  const runUnpair = async () => {
+    if (unpairBusy) return;
+    setUnpairBusy(true);
+    setMessage(null);
+    const res = await unpair();
+    setUnpairBusy(false);
+    if (res.ok) {
+      setMessage('Unpaired. You can pair again anytime with a new code.');
+      // Return to the solo state in place: reload partner/team fields so the
+      // invite banner path + solo copy take over on the next Home fetch.
+      await loadNaming();
+    } else {
+      setMessage(res.error ?? "Couldn't unpair. Try again.");
+    }
   };
 
   const runDelete = async () => {
@@ -157,6 +203,20 @@ export function ProfileScreen() {
               </Text>
 
               <AppButton label="Save" onPress={() => void saveNaming()} loading={namingBusy} style={{ marginTop: spacing.lg }} />
+
+              {/* Unpair — low-emphasis destructive-adjacent row at the bottom of
+                  the partner card. Two-tap confirm; neutral, recoverable copy. */}
+              <View style={styles.unpairRow}>
+                <TextButton
+                  label={confirmUnpair ? 'Tap again to confirm' : `Unpair from ${partnerFirstName ?? 'your partner'}`}
+                  onPress={handleUnpairTap}
+                  color={colors.text.muted.hex}
+                />
+                {unpairBusy && <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>…</Text>}
+              </View>
+              <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+                Stops sharing your photos with each other. You can pair again anytime with a new code.
+              </Text>
             </>
           ) : (
             <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
@@ -238,6 +298,7 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   dangerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  unpairRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.md },
   input: {
     height: 48,
     borderRadius: radius.md,

@@ -251,6 +251,36 @@ export async function acceptInvite(code: string): Promise<AcceptInviteResult> {
   };
 }
 
+export interface UnpairResult {
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * UNPAIR (compliance: a user must be able to stop receiving partner UGC).
+ * Detaches the CURRENT user from their partner — BOTH sides return to solo.
+ * Keeps both users' workout logs (photos stay per-user isolated); the shared
+ * pair team name is cleared. Idempotent: an already-solo user just gets ok.
+ *
+ * REAL → `unpair` RPC (schema.sql): SECURITY DEFINER, checks the caller is a
+ *   member of their 2-member pair group, then deletes BOTH memberships in one
+ *   transaction. No argument = a user can only ever unpair THEMSELVES.
+ * DEV → devMock.unpairDev (same outcome on the local store).
+ */
+export async function unpair(): Promise<UnpairResult> {
+  const session = await getStoredSession();
+  if (!session) return { ok: false, error: 'Sign in first.' };
+
+  if (session.isDevMode || !supabase) {
+    await devMock.unpairDev(session.user.id);
+    return { ok: true };
+  }
+
+  const { error } = await supabase.rpc('unpair');
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
 /** Human message template for the share sheet (invite-flow.md §1, one line). */
 export function inviteMessageTemplate(code: string): string {
   const part = code ? ` Code: ${code}` : '';

@@ -365,6 +365,27 @@ export const devMock = {
       updated_at: new Date().toISOString(),
     });
   },
+
+  /**
+   * UNPAIR (compliance: a user must be able to stop receiving partner UGC).
+   * Detaches the current dev user from their partner — BOTH sides return to
+   * solo. Removes the pair memberships (only the shared pair group, never any
+   * other membership) and resets both pair states; KEEPS each user's workout
+   * rows (photos stay per-user isolated); clears the shared team name.
+   * Idempotent: already-solo → no-op.
+   */
+  async unpairDev(userId: string): Promise<void> {
+    const state = await this.getPairState(userId);
+    const partnerId = state.partner?.id ?? null;
+    const both = partnerId ? [userId, partnerId] : [userId];
+    for (const uid of both) {
+      const memberships = await this.getDevMemberships(uid);
+      const kept = memberships.filter((m) => m.group_id !== DEV_PAIR_GROUP_ID);
+      await writeValue(`memberships:${uid}`, kept);
+      await this.savePairState(uid, { partner: null, accepted: false });
+    }
+    await this.saveTeamName(null);
+  },
 };
 
 /** So DEV MOCK and REAL have the same pickup point. Pairs with workouts rows. */
