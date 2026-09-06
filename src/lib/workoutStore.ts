@@ -22,7 +22,6 @@ import { createSignedUrls } from './storage';
 import { WEEK_START_DAYS } from './settings';
 import {
   weekStartFor,
-  relativeLogTime,
   WORKOUT_BUCKET,
   type WorkoutLog,
   type WeeklyContext,

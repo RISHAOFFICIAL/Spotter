@@ -19,7 +19,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
 import type { Database } from './database.types';
-import { devMock, type MockSession } from './mock';
+import { devMock } from './mock';
 
 export const EXPO_PUBLIC_SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 export const EXPO_PUBLIC_SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
@@ -135,13 +135,6 @@ export async function clearSession(): Promise<void> {
   } catch {}
 }
 
-/** True when the app runs against the REAL Supabase backend (not the dev
- * mock). Used by the delete-account flow to tell DEV (real deletion) from
- * REAL (forward-compatible stub, see accountDeletion.ts). */
-export function isRealMode(): boolean {
-  return !isDevMode && !!supabase;
-}
-
 // ---------------------------------------------------------------------------
 // Unified auth entry: single path (no signup-vs-login fork). One tap on
 // "Get started" opens the inline email+password form; submitting here either
@@ -191,5 +184,4 @@ export async function authenticate(email: string, password: string): Promise<Aut
   }
 }
 
-export type { MockSession };
 export { devMock };

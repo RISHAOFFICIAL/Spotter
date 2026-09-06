@@ -52,10 +52,6 @@ export interface WeeklyContext {
   weekEndedUnmet: boolean;
 }
 
-export function isWorkoutType(v: string | null | undefined): v is WorkoutType {
-  return !!v && (WORKOUT_TYPES as readonly string[]).includes(v);
-}
-
 const DAY_INDEX: Record<string, number> = {
   Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
 };
@@ -77,23 +73,14 @@ export function weekStartFor(now: Date, weekStartDay: string): Date {
   return d;
 }
 
-export function isInCurrentWeek(iso: string, now: Date, weekStartDay: string): boolean {
-  const t = new Date(iso);
-  if (Number.isNaN(t.getTime())) return false;
-  const start = weekStartFor(now, weekStartDay);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 7);
-  return t >= start && t < end;
-}
-
-/** Relative timestamp per home-screen.md card anatomy: "2h", then "Mon 3:14p". */
+/** Relative timestamp per home-screen.md card anatomy: "Just now" / "2h" / "Mon 3:14p". */
 export function relativeLogTime(iso: string, now: Date): string {
   const t = new Date(iso);
   if (Number.isNaN(t.getTime())) return '';
   const diffMs = now.getTime() - t.getTime();
-  if (diffMs < 0) return 'now';
+  if (diffMs < 60000) return 'Just now';
   const mins = Math.floor(diffMs / 60000);
-  if (mins < 60) return mins <= 1 ? '1m' : `${mins}m`;
+  if (mins < 60) return `${mins}m`;
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h`;
   const day = t.toLocaleDateString(undefined, { weekday: 'short' });

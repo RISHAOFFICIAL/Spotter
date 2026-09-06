@@ -19,11 +19,6 @@ const STORE_PREFIX = 'spotter.devmock:v1:';
 
 export type WeekStartDay = 'Sun'|'Mon'|'Tue'|'Wed'|'Thu'|'Fri'|'Sat';
 
-export interface MockSession {
-  user: SessionUser;
-  devMode: true;
-}
-
 export interface SessionUser {
   id: string;
   email: string;
@@ -408,21 +403,6 @@ export function formatDevInviteCode(ref: string): string {
   const raw = ref.replace(/^DEV-/i, '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
   const core = raw.slice(-8);
   return `DEV-${core.slice(0, 4)}-${core.slice(4, 8)}`;
-}
-
-/** True when the input is the display form of a dev-mock code
- * (`DEV-XXXX-XXXX`). Used by the UI to label demo codes. */
-export function isDevInviteDisplay(code: string): boolean {
-  return /^DEV-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code.trim().toUpperCase());
-}
-
-/** Human-friendly mock code always shown as `DEV-XXXX-XXXX` (the middle dash
- * is the *readable* pair, matching the mock's "code entry" UX). REAL tokens
- * keep the same shape/masking (display `XXXX-XXXX`, match case-insensitively
- * on the flavor's digits). Passing the seeded partner token yields exactly the
- * code shown in the demo's accept flow. */
-export function formatMockCode(raw: string): string {
-  return formatDevInviteCode(raw || DEV_PARTNER_CODE);
 }
 
 /** In DEV MOCK, both ourselves and the preset partner share one pair group id,
