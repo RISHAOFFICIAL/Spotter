@@ -47,6 +47,24 @@ import {
 
 type Stage = 'enter' | 'found';
 
+/** Map accept-stage failures to distinct, friendly messages (area 1b). The
+ * public `get_invite` lookup only reports found/not-found, so "already used"
+ * and "own code" can only surface here at accept time — map what the API can
+ * distinguish and fall back to one clear retry message otherwise. */
+function friendlyAcceptError(msg: string): string {
+  const m = msg.toLowerCase();
+  if (m.includes('own invite') || m.includes('your own')) {
+    return "That's your own code — share it, don't accept it.";
+  }
+  if (m.includes('already accepted') || m.includes('already been used')) {
+    return "That code's already been used. Ask your partner for a fresh one.";
+  }
+  if (m.includes('not found') || m.includes("couldn't find") || m.includes("isn't a valid")) {
+    return "We couldn't find that code. Double-check it with your partner.";
+  }
+  return msg;
+}
+
 export function EnterCodeScreen() {
   const router = useRouter();
   const { session, refresh } = useAuth();
@@ -61,8 +79,12 @@ export function EnterCodeScreen() {
 
   const resolve = async (value: string) => {
     const normalized = normalizeInviteCode(value);
-    if (!normalized || normalized.length < 6) {
-      setError('Enter the 8-character code from your partner.');
+    if (!normalized || normalized.length < 8) {
+      setError(
+        normalized
+          ? "That code looks too short — it's 8 characters."
+          : 'Enter the 8-character code from your partner.',
+      );
       return;
     }
     lastCode.current = normalized;
@@ -89,7 +111,7 @@ export function EnterCodeScreen() {
     const res = await acceptInvite(lastCode.current);
     if (!res.ok) {
       setBusy(false);
-      setError(res.error ?? 'Couldn\u2019t accept. Try again.');
+      setError(friendlyAcceptError(res.error ?? 'Couldn\u2019t accept. Try again.'));
       return;
     }
     await refresh();
@@ -121,6 +143,11 @@ export function EnterCodeScreen() {
       setError(authRes.error ?? 'Something went wrong.');
       return;
     }
+    // New account created without onboarding: commit the defaults so the Gate
+    // sees an onboarded user and we land directly on the shared feed (area 1d)
+    // instead of bouncing to the goal/week-start screens.
+    const { commitOnboarding, DEFAULT_WEEKLY_GOAL, DEFAULT_WEEK_START } = await import('@/lib/settings');
+    await commitOnboarding({ weeklyGoal: DEFAULT_WEEKLY_GOAL, weekStart: DEFAULT_WEEK_START });
     await refresh();
     setBusy(false);
     await accept();
@@ -154,7 +181,7 @@ export function EnterCodeScreen() {
               onSubmitEditing={() => void resolve(code)}
             />
             {error && <Text style={[textStyles.caption.style, { color: colors.text.danger.hex, textAlign: 'center' }]}>{error}</Text>}
-            <AppButton label="Look up code" onPress={() => void resolve(code)} disabled={code.length < 5} loading={busy} />
+            <AppButton label="Look up code" onPress={() => void resolve(code)} disabled={normalizeInviteCode(code).length < 8} loading={busy} />
             <View style={styles.soloRow}>
               <TextButton label="Just look around — I\u2019ll pair later" onPress={() => router.replace('/(home)/(tabs)')} color={colors.text.muted.hex} />
             </View>

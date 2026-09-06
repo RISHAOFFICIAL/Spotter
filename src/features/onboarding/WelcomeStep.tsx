@@ -7,7 +7,9 @@
  * same screen — no create-vs-login fork.
  */
 import React, { useState } from 'react';
-import { Image, KeyboardAvoidingView as KAV, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, KeyboardAvoidingView as KAV, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 // strict-api types break KAV's JSX signature (upstream RN 0.86 preview);
 // cast to a plain component type for this screen.
 const KeyboardAvoidingView = KAV as unknown as React.ComponentType<{ behavior?: 'height' | 'position' | 'padding' | undefined; children?: React.ReactNode }>;
@@ -29,6 +31,7 @@ export function WelcomeStep({
 }: {
   onDone: () => void;
 }) {
+  const router = useRouter();
   const [showAuth, setShowAuth] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -130,6 +133,21 @@ export function WelcomeStep({
         </View>
         {/* Slice C: forced-invite affordance — pre-generates a shareable code on mount (invite-flow.md §1). */}
         <InviteRow />
+
+        {/* Area 1a: zero-confusion pairing — a visible "already invited" path on
+            the Welcome screen so an invitee can jump straight to code entry
+            (routes to the Accept/EnterCode screen; reachable pre-auth). */}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Have an invite code?"
+          onPress={() => router.push('/(accept)')}
+          style={({ pressed }) => [styles.haveCodeRow, pressed && { opacity: 0.85 }]}
+        >
+          <Ionicons name="keypad-outline" size={icons.lengths.badge} color={colors.text.secondary.hex} />
+          <Text style={[textStyles.captionStrong.style, { color: colors.text.secondary.hex }]}>
+            Have an invite code?
+          </Text>
+        </Pressable>
       </ScrollView>
     </OnboardingScreen>
   );
@@ -144,6 +162,15 @@ const styles = StyleSheet.create({
   privacyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, marginTop: spacing.md },
   privacy: { color: colors.text.muted.hex, maxWidth: '85%', textAlign: 'left' },
   authCard: { marginBottom: spacing.md },
+  haveCodeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    minHeight: 44,
+    paddingHorizontal: spacing.md,
+    alignSelf: 'center',
+  },
   input: {
     height: 48,
     borderRadius: radius.md,
