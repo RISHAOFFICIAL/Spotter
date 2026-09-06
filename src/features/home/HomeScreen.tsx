@@ -110,7 +110,13 @@ export default function HomeScreen() {
     hasPartner && partnerDisplayName
       ? `DAYS THIS WEEK — just you & ${partnerDisplayName}`
       : undefined;
-  const weekComplete = !!ctx && !ctx.weekEndedUnmet && weekCount >= ctx.weeklyGoal;
+  const weekEndedUnmet = ctx?.weekEndedUnmet ?? false;
+  const weekComplete = !!ctx && !weekEndedUnmet && weekCount >= ctx.weeklyGoal;
+
+  // V1.1 Build #2 (S slice): own-miss line — a muted whisper under the ring,
+  // shown ONLY when THIS user missed the PREVIOUS week AND set a miss promise.
+  // The partner's promise is never surfaced here (that's a later slice).
+  const ownMissLine = ctx?.missLine?.kind === 'ownMiss' ? ctx.missLine.promise : null;
 
   // Status line under the ring (home-screen.md §2; rings are PERSONAL).
   // Compliance brief #2 (spec §3): the paired branches use "your ring" wording;
@@ -181,6 +187,18 @@ export default function HomeScreen() {
               <Text style={[textStyles.caption.style, statusLine.strong ? { color: statusLine.color, fontWeight: '600' } : { color: statusLine.color }, { textAlign: 'center', marginTop: spacing.sm }]}>
                 {statusLine.text}
               </Text>
+              {/* Own-miss whisper (v1.1 Build #2, S slice): only when last week
+                  was missed AND a promise exists. Neutral, never shaming. */}
+              {ownMissLine && (
+                <View style={styles.missLine}>
+                  <Text style={[textStyles.caption.style, { color: colors.text.muted.hex, textAlign: 'center' }]}>
+                    You said: “{ownMissLine}”
+                  </Text>
+                  <Text style={[textStyles.caption.style, { color: colors.text.muted.hex, textAlign: 'center' }]}>
+                    Still time to make this week count.
+                  </Text>
+                </View>
+              )}
             </>
           )}
         </View>
@@ -289,6 +307,7 @@ const styles = StyleSheet.create({
   },
   ringBlock: { alignItems: 'center', marginTop: spacing.sm, marginBottom: spacing.sm },
   ringLoading: { height: 132, justifyContent: 'center' },
+  missLine: { marginTop: spacing.sm, gap: spacing.xs, paddingHorizontal: spacing.lg },
   feedHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',

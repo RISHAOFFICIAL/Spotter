@@ -21,6 +21,7 @@ import { useAuth } from '@/features/auth/AuthProvider';
 import { AppButton, TextButton } from '@/components/AppButton';
 import { deleteAccount } from '@/lib/accountDeletion';
 import { unpair } from '@/lib/invites';
+import { getMissPromise, setMissPromise, MISS_PROMISE_MAX } from '@/lib/missPromise';
 import { getPetName, setPetName, setTeamName } from '@/lib/naming';
 import { fetchWeeklyContext } from '@/lib/workoutStore';
 import { colors, radius, spacing } from '@/theme/tokens';
@@ -46,6 +47,13 @@ export function ProfileScreen() {
   const [teamNameValue, setTeamNameValue] = useState('');
   const [namingBusy, setNamingBusy] = useState(false);
 
+  // Miss promise (v1.1 Build #2, S slice): an OPTIONAL personal note — "If I
+  // miss, I owe you: ___". Set/edited/cleared by each member for THEMSELVES,
+  // ≤80 chars, private to the pair, shown to the partner only via the
+  // future recap. Never a wager/enforcement system — neutral, optional copy.
+  const [missPromise, setMissPromiseValue] = useState('');
+  const [missPromiseBusy, setMissPromiseBusy] = useState(false);
+
   // Unpair (compliance: stop receiving partner UGC). Two-tap confirm: the
   // first tap flips the label to "Tap again to confirm" for 3s; a second tap
   // inside that window runs unpair(). No new screens.
@@ -54,22 +62,24 @@ export function ProfileScreen() {
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadNaming = async () => {
-    const [ctx, pet] = await Promise.all([fetchWeeklyContext(), getPetName()]);
+    const [ctx, pet, miss] = await Promise.all([fetchWeeklyContext(), getPetName(), getMissPromise()]);
     setPartnerFirstName(ctx.ok && ctx.context?.hasPartner ? (ctx.context.partner?.firstName ?? null) : null);
     setTeamNameValue(ctx.ok ? (ctx.context?.teamName ?? '') : '');
     setPetNameValue(pet ?? '');
+    setMissPromiseValue(miss ?? '');
   };
 
   useEffect(() => {
     let mounted = true;
     (async () => {
-      const [ctx, pet] = await Promise.all([fetchWeeklyContext(), getPetName()]);
+      const [ctx, pet, miss] = await Promise.all([fetchWeeklyContext(), getPetName(), getMissPromise()]);
       if (!mounted) return;
       if (ctx.ok && ctx.context?.hasPartner) {
         setPartnerFirstName(ctx.context.partner?.firstName ?? null);
         setTeamNameValue(ctx.context.teamName ?? '');
       }
       setPetNameValue(pet ?? '');
+      setMissPromiseValue(miss ?? '');
     })();
     return () => {
       mounted = false;
@@ -85,6 +95,18 @@ export function ProfileScreen() {
     const teamRes = await setTeamName(teamNameValue);
     setNamingBusy(false);
     setMessage(teamRes.ok ? 'Saved.' : (teamRes.error ?? 'Saved.'));
+  };
+
+  // Save (or clear, when empty) THIS user's own miss promise. Trim + ≤80
+  // handled in the lib; this just flushes the field and reports truthfully.
+  const saveMissPromise = async (text: string) => {
+    if (missPromiseBusy) return;
+    setMissPromiseBusy(true);
+    setMessage(null);
+    const res = await setMissPromise(text);
+    if (res.ok) setMissPromiseValue(text);
+    setMissPromiseBusy(false);
+    setMessage(res.ok ? 'Saved. This shows only if you miss the week.' : (res.error ?? 'Could not save.'));
   };
 
   // Two-tap confirm: first tap arms the confirm for 3s, second tap executes.
@@ -204,6 +226,36 @@ export function ProfileScreen() {
 
               <AppButton label="Save" onPress={() => void saveNaming()} loading={namingBusy} style={{ marginTop: spacing.lg }} />
 
+              {/* Miss promise (v1.1 Build #2, S slice) — optional personal
+                  note shown ONLY if THIS member misses a week. Low-emphasis,
+                  neutral, never shaming: it is a note to the pair, NOT a
+                  wager/stake/bet/debt/enforcement system. */}
+              <Text style={[textStyles.label.style, { color: colors.text.muted.hex, marginTop: spacing.xxl }]}>IF I MISS…</Text>
+              <TextInput
+                value={missPromise}
+                onChangeText={setMissPromiseValue}
+                placeholder="I owe you: ___"
+                placeholderTextColor={colors.text.muted.hex}
+                maxLength={MISS_PROMISE_MAX}
+                autoCapitalize="sentences"
+                style={styles.input}
+                accessibilityLabel="Miss note — what I owe if I miss the week"
+              />
+              <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+                A private note your partner sees only if you miss the week. Optional.
+              </Text>
+              <View style={styles.missRow}>
+                <TextButton label="Save" onPress={() => void saveMissPromise(missPromise)} color={colors.text.secondary.hex} />
+                {missPromise ? (
+                  <TextButton
+                    label="Clear"
+                    onPress={() => void saveMissPromise('')}
+                    color={colors.text.muted.hex}
+                  />
+                ) : null}
+                {missPromiseBusy && <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>…</Text>}
+              </View>
+
               {/* Unpair — low-emphasis destructive-adjacent row at the bottom of
                   the partner card. Two-tap confirm; neutral, recoverable copy. */}
               <View style={styles.unpairRow}>
@@ -299,6 +351,7 @@ const styles = StyleSheet.create({
   },
   dangerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   unpairRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.md },
+  missRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, marginTop: spacing.sm },
   input: {
     height: 48,
     borderRadius: radius.md,
