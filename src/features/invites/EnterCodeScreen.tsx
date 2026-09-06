@@ -16,7 +16,7 @@
  * end). Pending-until-accepted truth lives in the invite sheet ("Link sent —
  * waiting") and here.
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   KeyboardAvoidingView as KAV,
   Platform,
@@ -45,7 +45,7 @@ import {
   type PendingInviteInfo,
 } from '@/lib/invites';
 
-type Stage = 'enter' | 'found' | 'accepting' | 'error';
+type Stage = 'enter' | 'found';
 
 export function EnterCodeScreen() {
   const router = useRouter();
@@ -83,11 +83,12 @@ export function EnterCodeScreen() {
     if (busy) return;
     setBusy(true);
     setError(null);
-    setStage('accepting');
+    // Stay on the "found" screen while accepting and on failure: it already
+    // renders the inline error + a loading button. The 'accepting'/'error'
+    // stages have no JSX, so transitioning to them would blank the screen.
     const res = await acceptInvite(lastCode.current);
     if (!res.ok) {
       setBusy(false);
-      setStage('error');
       setError(res.error ?? 'Couldn\u2019t accept. Try again.');
       return;
     }
@@ -124,11 +125,6 @@ export function EnterCodeScreen() {
     setBusy(false);
     await accept();
   };
-
-  useEffect(() => {
-    // If a session is already present, accept directly (1 tap — spec §3).
-    if (session && stage === 'found') return;
-  }, [stage, session]);
 
   return (
     <View style={styles.screen}>
