@@ -5,6 +5,12 @@
 -- RLS is ON for every table. Every future photo/workout row is scoped to
 -- auth.uid() — photo isolation is a trust requirement, never relax these
 -- policies (see footer note for slice B).
+--
+-- NAMING FEATURE (optional pet name + team name): this file adds a nullable
+-- `groups.team_name` column (idempotent ALTER below). Existing/live projects
+-- MUST apply that ALTER before running a build that reads groups.team_name
+-- (the matching client code is in src/lib/naming.ts + workoutStore.ts). The
+-- pet name is LOCAL-ONLY (AsyncStorage) and needs no schema change.
 
 -- users: 1:1 with auth.users (id = auth.uid())
 create table if not exists public.users (
@@ -34,6 +40,15 @@ create table if not exists public.groups (
   creator_id uuid not null references public.users (id) on delete cascade,
   created_at timestamptz not null default now()
 );
+
+-- OPTIONAL PAIR TEAM NAME (naming feature). The `name` column above is the
+-- AUTO-GENERATED label ("{A} & {B}" / "Personal") and stays NOT NULL; the
+-- user-editable "team name" (e.g. "Team Us", wedding-party name) is a SEPARATE
+-- nullable column so an unset name leaves the UI byte-identical (feed header
+-- falls back to "Paired with {partner}"). Additive-only — no policy/table
+-- changes. Existing/live projects MUST apply this ALTER before running a build
+-- that reads groups.team_name.
+alter table public.groups add column if not exists team_name text;
 
 alter table public.groups enable row level security;
 

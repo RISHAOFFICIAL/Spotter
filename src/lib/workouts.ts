@@ -34,6 +34,8 @@ export interface WorkoutLog {
 
 export interface PartnerInfo {
   id: string;
+  /** Partner's REAL first name (never the pet name) — used for the Profile
+   * "Nickname for {firstName}" label. */
   firstName: string;
   /** True when the partner has logged at least one workout (feed card). */
   hasLogs: boolean;
@@ -48,6 +50,17 @@ export interface WeeklyContext {
   hasPartner: boolean;
   /** The accepted partner (null when solo). */
   partner: PartnerInfo | null;
+  /**
+   * The name THIS user sees for their partner everywhere it renders — the
+   * optional local "pet name" when set, otherwise the partner's real first
+   * name. Null when solo. Local-only (never synced to the partner).
+   */
+  partnerDisplayName: string | null;
+  /**
+   * Optional shared pair team name (e.g. "Team Us"). Null when unset OR solo.
+   * When set, the feed header shows this instead of "Paired with {name}".
+   */
+  teamName: string | null;
   /** Week already ended AND goal missed (ring turns danger red only then). */
   weekEndedUnmet: boolean;
 }

@@ -150,6 +150,25 @@ export const devMock = {
   ): Promise<void> {
     await writeValue(`pair:${userId}`, state);
   },
+
+  /**
+   * Optional shared pair TEAM NAME (naming feature B). In dev mock there is a
+   * single pair group (DEV_PAIR_GROUP_ID), so the team name is stored under a
+   * group-scoped key — SHARED between both sides (mirrors the real `groups`
+   * table row the pair shares). Null when unset (UI falls back to "Paired
+   * with {partner}").
+   */
+  async getTeamName(): Promise<string | null> {
+    return readValue<string>(`teamName:${DEV_PAIR_GROUP_ID}`);
+  },
+  async saveTeamName(name: string | null): Promise<void> {
+    const trimmed = name?.trim() ?? '';
+    if (trimmed) {
+      await writeValue(`teamName:${DEV_PAIR_GROUP_ID}`, trimmed);
+    } else {
+      await AsyncStorage.removeItem(`${STORE_PREFIX}teamName:${DEV_PAIR_GROUP_ID}`);
+    }
+  },
   /** Wipe ALL dev-mock state (smoke test / demo reset). Not used by the UI. */
   async clearAll(): Promise<void> {
     const keys = await AsyncStorage.getAllKeys();

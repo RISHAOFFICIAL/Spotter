@@ -26,6 +26,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Directory, File, Paths } from 'expo-file-system';
 
 import { devMock } from './mock';
+import { clearPetName } from './naming';
 import { clearSession, getStoredSession, supabase } from './supabase';
 import { DEVMOCK_PHOTOS_DIR } from './workoutStore';
 import { WORKOUT_BUCKET } from './workouts';
@@ -106,6 +107,7 @@ export async function deleteAccount(): Promise<DeleteAccountResult> {
         message: e instanceof Error ? e.message : "Couldn't delete your account. Try again.",
       };
     }
+    await clearPetName(session.user.id);
     await clearSession();
     for (const k of ACCOUNT_DELETION_KEYS) await removeLocalKey(k);
     return { ok: true, message: 'Account deleted. Sorry to see you go.' };
@@ -146,6 +148,7 @@ export async function deleteAccount(): Promise<DeleteAccountResult> {
   }
 
   // 3) Real deletion completed — clear the local session + leftover keys.
+  await clearPetName(session.user.id);
   await clearSession();
   for (const k of ACCOUNT_DELETION_KEYS) await removeLocalKey(k);
   return { ok: true, message: 'Account deleted. Sorry to see you go.' };

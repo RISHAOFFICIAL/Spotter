@@ -17,6 +17,7 @@ import * as Crypto from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
 
 import { devMock, type WorkoutRow, type DevMembership, DEV_PAIR_GROUP_ID } from './mock';
+import { getPetName } from './naming';
 import { getStoredSession, supabase } from './supabase';
 import { createSignedUrls } from './storage';
 import { WEEK_START_DAYS } from './settings';
@@ -163,6 +164,11 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
         }
       : null;
 
+    // Naming feature: pet name (local-only) + shared team name (dev pair group).
+    const petName = await getPetName();
+    const teamName = await devMock.getTeamName();
+    const partnerDisplayName = partner ? (petName || partner.firstName) : null;
+
     const rows = await devMock.listWorkouts(session.user.id);
     const partnerRows = partner ? await devMock.listWorkouts(partner.id) : [];
     const allRows = [...rows, ...partnerRows];
@@ -176,7 +182,7 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
         rowToLog(
           r,
           r.photo_path, // DEV: photo_path is a local file URI — display directly
-          r.user_id === session.user.id ? userName : (partner?.firstName ?? 'Partner'),
+          r.user_id === session.user.id ? userName : (partnerDisplayName ?? 'Partner'),
         ),
       )
       .sort((a, b) => (a.loggedAt < b.loggedAt ? 1 : -1));
@@ -188,6 +194,8 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
         logs,
         hasPartner: !!partner,
         partner,
+        partnerDisplayName,
+        teamName,
         // DEV mock never "ends" a week — ring stays honest-volt, no red scare.
         weekEndedUnmet: false,
       },
@@ -216,6 +224,8 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
   const myGroupIds = (myMemberships ?? []).map((m) => m.group_id);
   let partnerId: string | null = null;
   let partnerName = 'Partner';
+  let teamName: string | null = null;
+  let pairGroupId: string | null = null;
   if (myGroupIds.length > 0) {
     const { data: groupMems } = await supabase
       .from('memberships')
@@ -227,11 +237,12 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
       list.push(m.user_id);
       byGroup.set(m.group_id, list);
     }
-    for (const userIds of byGroup.values()) {
+    for (const [groupId, userIds] of byGroup.entries()) {
       if (userIds.length !== 2) continue;
       const other = userIds.find((u) => u !== session.user.id);
       if (other) {
         partnerId = other;
+        pairGroupId = groupId;
         break;
       }
     }
@@ -244,7 +255,22 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
       .maybeSingle();
     if (partnerUser?.name) partnerName = partnerUser.name.split(' ')[0];
   }
+  // Naming feature: read the pair group's optional team_name (same RLS-scoped
+  // read pattern — no new tables/policies; the pair group row is visible to
+  // its members via the existing memberships-scoped select used above).
+  if (pairGroupId) {
+    const { data: groupRow } = await supabase
+      .from('groups')
+      .select('team_name')
+      .eq('id', pairGroupId)
+      .maybeSingle();
+    teamName = groupRow?.team_name?.trim() || null;
+  }
   partner = partnerId ? { id: partnerId, firstName: partnerName, hasLogs: true } : null;
+  // Pet name is LOCAL-ONLY (never synced): this user's private display name
+  // for their partner, otherwise the partner's real first name.
+  const petName = await getPetName();
+  const partnerDisplayName = partner ? (petName || partnerName) : null;
 
   // Partner rows are visible through the pair-scope policy; fetch the last
   // 50 (the whole partner journal is out of MVP scope — feed = weekly context).
@@ -272,10 +298,12 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
       weeklyGoal,
       weekStartDay,
       logs: weekRows
-        .map((r) => rowToLog(r, signed.get(r.photo_path) ?? '', r.user_id === session.user.id ? userName : partnerName))
+        .map((r) => rowToLog(r, signed.get(r.photo_path) ?? '', r.user_id === session.user.id ? userName : (partnerDisplayName ?? partnerName)))
         .sort((a, b) => (a.loggedAt < b.loggedAt ? 1 : -1)),
       hasPartner: !!partner,
       partner,
+      partnerDisplayName,
+      teamName,
       weekEndedUnmet: now >= weekEnd && ownWeek.length < weeklyGoal,
     },
   };

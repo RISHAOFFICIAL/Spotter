@@ -42,18 +42,22 @@ export interface Database {
         Row: {
           id: string;
           name: string;
+          /** Optional pair team name (nullable; unset = UI falls back to partner name). */
+          team_name: string | null;
           creator_id: string;
           created_at: string;
         };
         Insert: {
           id?: string;
           name: string;
+          team_name?: string | null;
           creator_id: string;
           created_at?: string;
         };
         Update: {
           id?: string;
           name?: string;
+          team_name?: string | null;
           creator_id?: string;
           created_at?: string;
         };
