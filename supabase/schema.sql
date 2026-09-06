@@ -101,6 +101,28 @@ create policy "memberships_update_own" on public.memberships
 create policy "memberships_delete_own" on public.memberships
   for delete using (auth.uid() = user_id);
 
+-- V1.1 BUILD #2 (M slice): pair-scoped READ of a partner's membership row.
+-- Mirrors workouts_select_pair (same 2-member-group shape): a user may SELECT
+-- the OTHER member's row inside their shared pair group — and nothing else.
+-- This is what lets the partner MissCard read the partner's miss_promise
+-- (their own note, surfaced only when THEY missed a week) plus their
+-- weekly_goal for the fallback miss computation. Insert/update/delete stay
+-- strictly own-row (memberships_update_own still requires auth.uid() =
+-- user_id), so a partner can never write your promise — only see it via this
+-- read path when the MissCard conditions hold.
+create policy "memberships_select_pair" on public.memberships
+  for select using (
+    auth.uid() <> user_id
+    and exists (
+      select 1
+      from public.memberships mine
+      join public.memberships theirs on theirs.group_id = mine.group_id
+      where mine.user_id = auth.uid()
+        and theirs.user_id = memberships.user_id
+        and (select count(*) from public.memberships m where m.group_id = mine.group_id) = 2
+    )
+  );
+
 -- ---------------------------------------------------------------------------
 -- SLICE B: workouts + photo-proof storage (photo isolation — trust requirement)
 -- ---------------------------------------------------------------------------
