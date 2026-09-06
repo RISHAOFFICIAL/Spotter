@@ -27,7 +27,7 @@ import { InviteSheet } from '@/features/invites/InviteSheet';
 import { MissSetupSheet } from '@/features/invites/MissSetupSheet';
 import { NotificationsSheet } from '@/features/invites/NotificationsSheet';
 import { hasSeenMissPrompt } from '@/lib/missPromise';
-import { shouldAskNotificationPermission, refreshPushRegistrationIfGranted } from '@/lib/notifications';
+import { shouldAskNotificationPermission, refreshPushRegistrationIfGranted, subscribePushDispatchForeground } from '@/lib/notifications';
 import { colors, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
 import { fetchWeeklyContext } from '@/lib/workoutStore';
@@ -138,6 +138,10 @@ export default function HomeScreen() {
     // previous launch, re-read + re-register the push token so a rotated/
     // expired token refreshes on every app start. Best-effort + idempotent.
     void refreshPushRegistrationIfGranted();
+    // V1.1 Build #3 (slice 2): the client-initiated delivery engine — on this
+    // mount AND every foreground transition, evaluate pending_invite +
+    // missed_week (self-target kinds). Fire-and-forget; dedupe keeps it safe.
+    subscribePushDispatchForeground();
     // keep relative timestamps fresh (cheap; not a second fetch — just re-render)
     const t = setInterval(() => setNow(new Date()), 60000);
     return () => {

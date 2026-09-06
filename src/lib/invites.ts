@@ -22,6 +22,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { devMock, formatDevInviteCode, DEV_PAIR_GROUP_ID, type DevInvite } from './mock';
 import { getStoredSession, supabase } from './supabase';
 import { track } from './analytics';
+import { notifyInviteAccepted, notifyInviteAcceptedAfterRealPair } from './pushDispatch';
 
 export const INVITE_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
@@ -241,12 +242,21 @@ export async function acceptInvite(code: string): Promise<AcceptInviteResult> {
       // Real two-user accept: pair the current user with the inviter.
       await devMock.acceptDevPairWith(session.user.id, inviter);
       void track('pair_action', { action: 'invite_accepted', groupId: DEV_PAIR_GROUP_ID });
+      // V1.1 Build #3 slice 2: invite_accepted push to the INVITER — AFTER
+      // commit, never blocks the accept (fire-and-forget, try/catch inside).
+      void notifyInviteAccepted({
+        inviteId: invite.id,
+        inviterId: inviter.id,
+        inviteeName: session.user.email.split('@')[0] ?? null,
+      });
       return { ok: true, inviterName: inviter.email.split('@')[0] ?? 'Partner' };
     }
     // Self-accept keeps the slice-C single-user demo story: pairs with the
     // preset demo partner so the shared feed renders without a real person.
     await devMock.acceptDevPair(session.user.id);
     void track('pair_action', { action: 'invite_accepted', groupId: DEV_PAIR_GROUP_ID });
+    // No invite_accepted push for the self-demo path: the "partner" is the
+    // preset demo account that never consented to receive pushes.
     return { ok: true, inviterName: 'Dev Partner' };
   }
 
@@ -263,9 +273,16 @@ export async function acceptInvite(code: string): Promise<AcceptInviteResult> {
     string,
     string | boolean | number | null | undefined
   >;
+  const groupId = typeof parsed?.group_id === 'string' ? parsed.group_id : undefined;
+  // V1.1 Build #3 slice 2: invite_accepted push to the INVITER — AFTER the
+  // RPC commit; the inviter is resolved as the other seat of the fresh pair
+  // group (the acceptor can't read the invite row — inviter-owned RLS).
+  if (groupId) {
+    void notifyInviteAcceptedAfterRealPair(groupId, session.user.email.split('@')[0] ?? null);
+  }
   return {
     ok: true,
-    groupId: typeof parsed?.group_id === 'string' ? parsed.group_id : undefined,
+    groupId,
     inviterName: typeof parsed?.inviter_name === 'string' ? parsed.inviter_name : undefined,
   };
 }

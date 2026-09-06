@@ -23,6 +23,7 @@ import { getPetName } from './naming';
 import { getMissPromise, getPartnerMissPromise } from './missPromise';
 import { getStoredSession, supabase } from './supabase';
 import { createSignedUrls } from './storage';
+import { notifyPartnerLogged } from './pushDispatch';
 import { WEEK_START_DAYS } from './settings';
 import {
   weekStartFor,
@@ -551,6 +552,9 @@ export async function logWorkout(input: NewWorkout): Promise<LogWorkoutResult> {
         groupId: DEV_PAIR_GROUP_ID,
         props: { week_count: (await devMock.listWorkouts(session.user.id)).length },
       });
+      // V1.1 Build #3 slice 2: partner_logged push — AFTER commit, never
+      // blocks the log (fire-and-forget, try/catch inside).
+      void notifyPartnerLogged(workoutId, input.workoutType ?? null);
       return {
         ok: true,
         log: rowToLog(
@@ -591,6 +595,9 @@ export async function logWorkout(input: NewWorkout): Promise<LogWorkoutResult> {
 
     // V1.1: workout_logged — references the workout id only (no photo path).
     void track('workout_logged', { sourceId: row.id });
+    // V1.1 Build #3 slice 2: partner_logged push — AFTER commit, never
+    // blocks the log (fire-and-forget, try/catch inside).
+    void notifyPartnerLogged(row.id, input.workoutType ?? null);
     return {
       ok: true,
       log: rowToLog(

@@ -254,6 +254,24 @@ export const devMock = {
     else rows.push(device);
     await writeValue(`pushDevices:${userId}`, rows);
   },
+  // ---- V1.1 BUILD #3 (slice 2): dev-mock push_deliveries log ---------------
+
+  /**
+   * Dev-mock delivery log (mirrors the REAL push_deliveries table — shape +
+   * UNIQUE dedupe_key semantics; stored per RECIPIENT user, so the smoke
+   * harness can drive cross-user sends exactly like the real per-user keys).
+   */
+  async listPushDeliveries(userId: string): Promise<DevPushDelivery[]> {
+    return (await readValue<DevPushDelivery[]>(`pushDeliveries:${userId}`)) ?? [];
+  },
+  async savePushDeliveries(userId: string, rows: DevPushDelivery[]): Promise<void> {
+    await writeValue(`pushDeliveries:${userId}`, rows);
+  },
+  /** Clear one user's delivery log (smoke reset between phases). */
+  async clearPushDeliveries(userId: string): Promise<void> {
+    await AsyncStorage.removeItem(`${STORE_PREFIX}pushDeliveries:${userId}`);
+  },
+
   /** Wipe ALL dev-mock state (smoke test / demo reset). Not used by the UI. */
   async clearAll(): Promise<void> {
     const keys = await AsyncStorage.getAllKeys();
@@ -291,6 +309,7 @@ export const devMock = {
           key === `${STORE_PREFIX}missPromise:${userId}` ||
           key === `${STORE_PREFIX}notifPrefs:${userId}` ||
           key === `${STORE_PREFIX}pushDevices:${userId}` ||
+          key === `${STORE_PREFIX}pushDeliveries:${userId}` ||
           (emailKey !== null && key === emailKey) ||
           (legacy?.id === userId && key === `${STORE_PREFIX}user`);
         if (ownedKey) {
@@ -555,6 +574,20 @@ export interface DevPushDevice {
   app_version: string;
   last_seen_at: string;
   created_at: string;
+}
+
+/** V1.1 Build #3 (slice 2): dev-mock push_deliveries row (mirrors the REAL
+ * `push_deliveries` table — dedupe_key UNIQUE per recipient user store). */
+export interface DevPushDelivery {
+  id: string;
+  user_id: string;
+  dedupe_key: string;
+  kind: string;
+  status: string;
+  suppressed_reason: string | null;
+  error: string | null;
+  created_at: string;
+  sent_at: string | null;
 }
 
 export const DEV_PARTNER_EMAIL = 'dev_partner@spotter.test';

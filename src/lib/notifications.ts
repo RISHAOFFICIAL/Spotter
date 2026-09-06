@@ -174,3 +174,4 @@ export async function refreshPushRegistrationIfGranted(): Promise<void> {
 
 // Re-export the registration lib so the app calls ONE import surface.
 export { registerPushDevice, getPushDeviceToken } from './pushRegistration';
+export { subscribePushDispatchForeground } from './pushDispatch';
