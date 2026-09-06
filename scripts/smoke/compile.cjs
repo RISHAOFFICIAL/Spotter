@@ -23,6 +23,7 @@ const FILES = [
   'src/lib/storage.ts',
   'src/lib/workoutStore.ts',
   'src/lib/naming.ts',
+  'src/lib/missPromise.ts',
 ];
 
 function stripUnused(moduleMap) {

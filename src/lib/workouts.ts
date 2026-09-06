@@ -63,6 +63,15 @@ export interface WeeklyContext {
   teamName: string | null;
   /** Week already ended AND goal missed (ring turns danger red only then). */
   weekEndedUnmet: boolean;
+  /**
+   * V1.1 Build #2 (S slice) — own-miss line. A small muted line Home shows
+   * ONLY when THIS user missed the PREVIOUS week AND set a miss promise:
+   * `{ kind: 'ownMiss', promise }` → render `You said: "{promise}"` + one
+   * gentle line. `null` when the previous week was NOT missed or no promise
+   * is set. Never carries the partner's promise (their surface is a later
+   * slice).
+   */
+  missLine: { kind: 'ownMiss'; promise: string } | null;
 }
 
 const DAY_INDEX: Record<string, number> = {

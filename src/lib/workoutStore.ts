@@ -18,8 +18,9 @@ import { Directory, File, Paths } from 'expo-file-system';
 
 import { devMock, type WorkoutRow, type DevMembership, DEV_PAIR_GROUP_ID } from './mock';
 import { track } from './analytics';
-import { maybeFinalizePreviousWeek } from './weeklyResults';
+import { maybeFinalizePreviousWeek, previousWeekRange, countInRange } from './weeklyResults';
 import { getPetName } from './naming';
+import { getMissPromise } from './missPromise';
 import { getStoredSession, supabase } from './supabase';
 import { createSignedUrls } from './storage';
 import { WEEK_START_DAYS } from './settings';
@@ -90,6 +91,95 @@ function rowToLog(row: WorkoutRow, photoUri: string, authorName: string): Workou
     authorName,
     photoUri,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Own-miss line (v1.1 Build #2, S slice)
+// ---------------------------------------------------------------------------
+
+/**
+ * Does THIS user have a miss promise whose previous week was missed, and what
+ * is the promise text to show? Reads only the caller's OWN promise — the
+ * partner's promise is never surfaced in this slice.
+ */
+async function computeOwnMissLine(userId: string): Promise<{ kind: 'ownMiss'; promise: string } | null> {
+  try {
+    const promise = await getMissPromise(userId);
+    const missed = await wasPreviousWeekMissed(userId);
+    if (missed && promise) return { kind: 'ownMiss', promise };
+  } catch {
+    // Never fail the weekly context over a promise line — it's a whisper.
+  }
+  return null;
+}
+
+/**
+ * Whether the PREVIOUS fully-elapsed week was missed by this user. Reuses the
+ * Build #1 weekly-results snapshot when one exists (the finalized row is the
+ * source of truth after finalize-on-fetch); before/without a snapshot, falls
+ * back to counting the user's workout logs inside the previous week range —
+ * the same computation the ring uses, so it stays honest.
+ */
+async function wasPreviousWeekMissed(userId: string): Promise<boolean> {
+  const session = await getStoredSession();
+  if (!session) return false;
+  const weekStartDay = session.isDevMode
+    ? ((await devMock.getProfile(userId))?.week_start_day ?? 'Mon')
+    : 'Mon';
+
+  // Try the Build #1 snapshot first (finalized = authoritative).
+  if (session.isDevMode || !supabase) {
+    const results = await devMock.listResults(userId);
+    const prev = previousWeekRange(new Date(), weekStartDay);
+    const snap = prev
+      ? results.find((r) => r.group_id === DEV_PAIR_GROUP_ID && r.week_start_at === prev.start.toISOString())
+      : undefined;
+    if (snap) return !snap.completed;
+    // No snapshot: count logs in the previous week (ring-style fallback).
+    const rows = await devMock.listWorkouts(userId);
+    const count = prev ? countInRange(rows, prev.start, prev.end) : 0;
+    const goal = (await devMock.getProfile(userId))?.weekly_goal ?? 3;
+    return count < goal;
+  }
+
+  try {
+    const { data: results } = await supabase
+      .from('weekly_results')
+      .select('completed')
+      .eq('user_id', userId)
+      .order('week_start_at', { ascending: false })
+      .limit(1);
+    const snap = (results ?? [])[0];
+    if (snap) return !snap.completed;
+    // No snapshot yet: count own logs in the previous week via ranged select.
+    const { data: userRow } = await supabase
+      .from('users')
+      .select('week_start_day')
+      .eq('id', userId)
+      .maybeSingle();
+    const day = userRow?.week_start_day ?? 'Mon';
+    const prev = previousWeekRange(new Date(), day);
+    const { data: rows, error } = prev
+      ? await supabase
+          .from('workouts')
+          .select('id')
+          .eq('user_id', userId)
+          .gte('logged_at', prev.start.toISOString())
+          .lt('logged_at', prev.end.toISOString())
+      : ({ data: null, error: null } as const);
+    if (error) return false;
+    const { data: settings } = await supabase
+      .from('memberships')
+      .select('weekly_goal')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const goal = settings?.weekly_goal ?? 3;
+    return (rows ?? []).length < goal;
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -204,6 +294,7 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
         teamName,
         // DEV mock never "ends" a week — ring stays honest-volt, no red scare.
         weekEndedUnmet: false,
+        missLine: await computeOwnMissLine(session.user.id),
       },
     };
   }
@@ -315,6 +406,7 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
       partnerDisplayName,
       teamName,
       weekEndedUnmet: now >= weekEnd && ownWeek.length < weeklyGoal,
+      missLine: await computeOwnMissLine(session.user.id),
     },
   };
 }

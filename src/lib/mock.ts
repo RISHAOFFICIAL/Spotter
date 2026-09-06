@@ -186,6 +186,29 @@ export const devMock = {
   async clearResults(userId: string): Promise<void> {
     await AsyncStorage.removeItem(`${STORE_PREFIX}results:${userId}`);
   },
+  // ---- V1.1 BUILD #2 (S slice): miss promise ------------------------------
+
+  /**
+   * The member's OWN optional miss promise ("If I miss, I owe you: ___").
+   * In the real schema the value lives on the member's OWN membership row in
+   * the pair group (own-row RLS, never readable/writable by the partner in
+   * this build); here it is stored per-user under its own key, mirroring that
+   * own-row isolation. Empty string == cleared; null == never set.
+   */
+  async getMissPromise(userId: string): Promise<string | null> {
+    const raw = await readValue<string>(`missPromise:${userId}`);
+    const trimmed = raw?.trim() ?? '';
+    return trimmed || null;
+  },
+  /** Save (trimmed) or clear (empty string) one user's miss promise. */
+  async saveMissPromise(userId: string, text: string): Promise<void> {
+    const trimmed = text.trim();
+    if (trimmed) {
+      await writeValue(`missPromise:${userId}`, trimmed);
+    } else {
+      await AsyncStorage.removeItem(`${STORE_PREFIX}missPromise:${userId}`);
+    }
+  },
   /** Wipe ALL dev-mock state (smoke test / demo reset). Not used by the UI. */
   async clearAll(): Promise<void> {
     const keys = await AsyncStorage.getAllKeys();
@@ -220,6 +243,7 @@ export const devMock = {
           key === `${STORE_PREFIX}memberships:${userId}` ||
           key === `${STORE_PREFIX}invites:${userId}` ||
           key === `${STORE_PREFIX}results:${userId}` ||
+          key === `${STORE_PREFIX}missPromise:${userId}` ||
           (emailKey !== null && key === emailKey) ||
           (legacy?.id === userId && key === `${STORE_PREFIX}user`);
         if (ownedKey) {
@@ -401,6 +425,9 @@ export const devMock = {
       const kept = memberships.filter((m) => m.group_id !== DEV_PAIR_GROUP_ID);
       await writeValue(`memberships:${uid}`, kept);
       await this.savePairState(uid, { partner: null, accepted: false });
+      // V1.1 Build #2 (S slice): the miss promise lives on the pair membership
+      // (real mode) — unpair drops that row, so the dev mirror clears it too.
+      await this.saveMissPromise(uid, '');
     }
     await this.saveTeamName(null);
   },

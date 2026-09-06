@@ -67,7 +67,7 @@ export function previousWeekRange(now: Date, weekStartDay: string): { start: Dat
   return { start, end };
 }
 
-function countInRange(rows: WorkoutRow[], start: Date, end: Date): number {
+export function countInRange(rows: WorkoutRow[], start: Date, end: Date): number {
   let n = 0;
   for (const r of rows) {
     const t = new Date(r.logged_at);
