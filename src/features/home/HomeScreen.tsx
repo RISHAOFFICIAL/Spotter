@@ -103,6 +103,15 @@ export default function HomeScreen() {
   const teamName = ctx?.teamName ?? null;
   const emptyVariant: EmptyCase = hasPartner ? 'noLogsPartner' : 'noLogsNoPartner';
 
+  // Ring center label (batch A §6): paired shows the "just you & {name}"
+  // pattern; solo keeps the plain canonical label. Goal-reached (and still
+  // winnable) flips the center label to "WEEK COMPLETE" in the ring itself.
+  const ringLabel =
+    hasPartner && partnerDisplayName
+      ? `DAYS THIS WEEK — just you & ${partnerDisplayName}`
+      : undefined;
+  const weekComplete = !!ctx && !ctx.weekEndedUnmet && weekCount >= ctx.weeklyGoal;
+
   // Status line under the ring (home-screen.md §2; rings are PERSONAL).
   // Compliance brief #2 (spec §3): the paired branches use "your ring" wording;
   // branch on hasPartner && partnerFirstName for the 0-logs and partial cases
@@ -162,7 +171,13 @@ export default function HomeScreen() {
             </View>
           ) : (
             <>
-              <WeeklyRing count={weekCount} goal={ctx?.weeklyGoal ?? 3} weekEndedUnmet={ctx?.weekEndedUnmet ?? false} />
+              <WeeklyRing
+                count={weekCount}
+                goal={ctx?.weeklyGoal ?? 3}
+                weekEndedUnmet={ctx?.weekEndedUnmet ?? false}
+                label={ringLabel}
+                weekComplete={weekComplete}
+              />
               <Text style={[textStyles.caption.style, statusLine.strong ? { color: statusLine.color, fontWeight: '600' } : { color: statusLine.color }, { textAlign: 'center', marginTop: spacing.sm }]}>
                 {statusLine.text}
               </Text>
@@ -206,7 +221,11 @@ export default function HomeScreen() {
             <View style={styles.feedHeaderRow}>
               <Text style={[textStyles.label.style, styles.feedHeader]}>RECENT</Text>
               {hasPartner && partnerFirstName ? (
-                <Text style={[textStyles.label.style, { color: colors.text.muted.hex }]}>
+                <Text
+                  style={[textStyles.label.style, { color: colors.text.muted.hex }, styles.feedHeaderName]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
                   {teamName ? teamName : `Paired with ${partnerDisplayName ?? partnerFirstName}`}
                 </Text>
               ) : null}
@@ -277,7 +296,8 @@ const styles = StyleSheet.create({
     marginTop: spacing.xxl,
     marginBottom: spacing.sm,
   },
-  feedHeader: { color: colors.text.muted.hex },
+  feedHeader: { color: colors.text.muted.hex, flexShrink: 0 },
+  feedHeaderName: { flexShrink: 1, textAlign: 'right' },
   feed: { gap: spacing.md },
   joinCode: { alignItems: 'center', marginTop: spacing.lg, paddingVertical: spacing.sm },
   toast: {

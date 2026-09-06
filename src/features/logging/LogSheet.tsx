@@ -43,7 +43,7 @@ type CameraViewProps_ = {
 const CameraViewT = CameraView as unknown as React.ComponentType<CameraViewProps_>;
 
 import { AppButton } from '@/components/AppButton';
-import { colors, radius, spacing } from '@/theme/tokens';
+import { colors, motion, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
 import { logWorkout, type NewWorkout } from '@/lib/workoutStore';
 import { WORKOUT_TYPES, type WorkoutType, type WorkoutLog } from '@/lib/workouts';
@@ -68,6 +68,7 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
   const [workoutType, setWorkoutType] = useState<WorkoutType | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cameraRef = useRef<CameraView>(null);
+  const [facing, setFacing] = useState<'front' | 'back'>('back');
   const busy = useRef(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saving = stage === 'saving';
@@ -79,6 +80,7 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
     setCaptured(null);
     setWorkoutType(null);
     setError(null);
+    setFacing('back');
     return () => {
       if (closeTimer.current) clearTimeout(closeTimer.current);
     };
@@ -138,7 +140,7 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
     closeTimer.current = setTimeout(() => {
       setStage('camera');
       onClose();
-    }, 1400);
+    }, motion.confirmMs);
   }, [captured, workoutType, onLogged, onClose]);
 
   const isFirstRun = !permission?.granted;
@@ -153,7 +155,7 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
                 <CameraViewT
                   ref={cameraRef}
                   style={styles.camera as StyleProp<ViewStyle>}
-                  facing="back"
+                  facing={facing}
                   onMountError={() => setError('Couldn\u2019t open the camera. Try again.')}
                 />
               ) : (
@@ -183,7 +185,15 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
                 </Text>
               </View>
               <View style={styles.previewRow}>
-                <View style={{ width: 64 }} />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={facing === 'back' ? 'Switch to front camera' : 'Switch to back camera'}
+                  onPress={() => setFacing((f) => (f === 'back' ? 'front' : 'back'))}
+                  hitSlop={10}
+                  style={styles.flipBtn}
+                >
+                  <Ionicons name="camera-reverse-outline" size={22} color={colors.text.secondary.hex} />
+                </Pressable>
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Take photo"
@@ -202,6 +212,9 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
                   <Text style={[textStyles.captionStrong.style, { color: colors.text.primary.hex }]}>Cancel</Text>
                 </Pressable>
               </View>
+              <Text style={[textStyles.caption.style, { color: colors.text.muted.hex, textAlign: 'center' }]}>
+                Keep other gym members out of frame.
+              </Text>
               {error && (
                 <Text style={[textStyles.caption.style, { color: colors.text.danger.hex, textAlign: 'center' }]}>
                   {error}
@@ -311,6 +324,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  flipBtn: {
+    width: 64,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   shutter: {
     width: 68,

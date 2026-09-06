@@ -91,7 +91,6 @@ export function FeedCard({ log, now }: { log: WorkoutLog; now: Date }) {
                   <Ionicons name="radio" size={9} color={colors.brand.primary.hex} />
                   <Text style={[textStyles.label.style, styles.liveBadgeText]}>Live</Text>
                 </View>
-                <Ionicons name="checkmark-circle" size={14} color={colors.status.success.hex} accessibilityLabel="Photo verified" />
               </>
             )}
             {/* Owner-only overflow control (non-destructive; confirm step inside). */}

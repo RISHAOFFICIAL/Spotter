@@ -263,6 +263,7 @@ function buildLines() {
   push('export const motion = {');
   push(`  pageTransitionMs: ${mo.pageTransitionMs},`);
   push(`  ringFillMs: ${mo.ringFillMs},`);
+  push(`  confirmMs: ${mo.confirmMs},`);
   push(`  ringFillEasing: ${q(mo.ringFillEasing)},`);
   push(`  pressMs: ${mo.pressMs},`);
   push(`  reactionPopMs: ${mo.reactionPopMs},`);

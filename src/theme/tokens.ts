@@ -359,6 +359,7 @@ export const shadows = {
 export const motion = {
   pageTransitionMs: 250,
   ringFillMs: 400,
+  confirmMs: 2200,
   ringFillEasing: 'cubic-bezier(0.22, 1, 0.36, 1)',
   pressMs: 90,
   reactionPopMs: 180,

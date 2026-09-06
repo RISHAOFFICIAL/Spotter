@@ -131,6 +131,11 @@ export function WelcomeStep({
             Your photos are sealed to your account. Only you and your partner can ever see them.
           </Text>
         </View>
+        {/* Free-core promise (growth brief): honest, non-binding "no subscription"
+            trust line near the privacy row (compliance trust-line pattern). */}
+        <Text style={[textStyles.caption.style, { color: colors.text.muted.hex, textAlign: 'center' }]}>
+          Free. No subscription required.
+        </Text>
         {/* Slice C: forced-invite affordance — pre-generates a shareable code on mount (invite-flow.md §1). */}
         <InviteRow />
 
@@ -143,8 +148,8 @@ export function WelcomeStep({
           onPress={() => router.push('/(accept)')}
           style={({ pressed }) => [styles.haveCodeRow, pressed && { opacity: 0.85 }]}
         >
-          <Ionicons name="keypad-outline" size={icons.lengths.badge} color={colors.text.secondary.hex} />
-          <Text style={[textStyles.captionStrong.style, { color: colors.text.secondary.hex }]}>
+          <Ionicons name="keypad-outline" size={icons.lengths.badge} color={colors.text.muted.hex} />
+          <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
             Have an invite code?
           </Text>
         </Pressable>
@@ -159,7 +164,7 @@ const styles = StyleSheet.create({
   hero: { width: 240, height: 240, alignSelf: 'center', marginTop: spacing.lg },
   headline: { textAlign: 'center', color: colors.text.primary.hex, paddingHorizontal: spacing.sm },
   subhead: { textAlign: 'center', color: colors.text.secondary.hex, paddingHorizontal: spacing.md },
-  privacyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, marginTop: spacing.md },
+  privacyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, marginTop: spacing.lg },
   privacy: { color: colors.text.muted.hex, maxWidth: '85%', textAlign: 'left' },
   authCard: { marginBottom: spacing.md },
   haveCodeRow: {
@@ -168,6 +173,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: spacing.sm,
     minHeight: 44,
+    marginTop: spacing.xs,
     paddingHorizontal: spacing.md,
     alignSelf: 'center',
   },

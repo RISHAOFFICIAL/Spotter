@@ -109,8 +109,12 @@ export function ProfileScreen() {
       <View style={styles.content}>
         <Text style={[textStyles.label.style, { color: colors.text.muted.hex }]}>ACCOUNT</Text>
         <View style={styles.card}>
-          <Text style={[textStyles.bodyStrong.style, { color: colors.text.primary.hex }]}>{name || 'You'}</Text>
-          <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex }]}>{email}</Text>
+          <Text style={[textStyles.bodyStrong.style, { color: colors.text.primary.hex }]} numberOfLines={1} ellipsizeMode="tail">
+            {name || 'You'}
+          </Text>
+          <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex }]} numberOfLines={1} ellipsizeMode="tail">
+            {email}
+          </Text>
         </View>
 
         {/* Naming (optional) — pet name is local-only; team name is shared.
@@ -162,7 +166,7 @@ export function ProfileScreen() {
         </View>
 
         {/* Danger zone — discoverable, honest, not hidden. */}
-        <Text style={[textStyles.label.style, { color: colors.text.muted.hex, marginTop: spacing.xxxl }]}>ACCOUNT</Text>
+        <Text style={[textStyles.label.style, { color: colors.text.muted.hex, marginTop: spacing.xxxl }]}>DANGER ZONE</Text>
         <View style={styles.card}>
           <Pressable
             accessibilityRole="button"

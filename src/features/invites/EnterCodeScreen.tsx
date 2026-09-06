@@ -83,7 +83,7 @@ export function EnterCodeScreen() {
       setError(
         normalized
           ? "That code looks too short — it's 8 characters."
-          : 'Enter the 8-character code from your partner.',
+          : 'Enter the 8-character code from your partner — we\u2019ll look them up.',
       );
       return;
     }

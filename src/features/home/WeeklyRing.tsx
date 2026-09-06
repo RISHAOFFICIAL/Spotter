@@ -43,7 +43,21 @@ const RingSvg = ({ children, size }: { children: React.ReactNode; size: number }
   </View>
 );
 
-export function WeeklyRing({ count, goal, weekEndedUnmet }: { count: number; goal: number; weekEndedUnmet: boolean }) {
+export function WeeklyRing({
+  count,
+  goal,
+  weekEndedUnmet,
+  label,
+  weekComplete,
+}: {
+  count: number;
+  goal: number;
+  weekEndedUnmet: boolean;
+  /** Center label override (paired "just you & …" pattern); defaults "DAYS THIS WEEK". */
+  label?: string;
+  /** Goal reached AND week still winnable — center label flips to volt "WEEK COMPLETE". */
+  weekComplete?: boolean;
+}) {
   const clamped = Math.min(Math.max(count, 0), goal);
   const fraction = goal > 0 ? clamped / goal : 0;
   const progress = useRef(new Animated.Value(0)).current;
@@ -74,6 +88,8 @@ export function WeeklyRing({ count, goal, weekEndedUnmet }: { count: number; goa
   const missed = weekEndedUnmet;
   const ringColor = missed ? colors.status.danger.hex : colors.status.success.hex;
   const numeral = `${count}/${goal}`;
+  const centerLabel = weekComplete ? 'WEEK COMPLETE' : label ?? 'DAYS THIS WEEK';
+  const centerLabelColor = weekComplete ? colors.status.success.hex : colors.text.secondary.hex;
 
   return (
     <View
@@ -111,8 +127,8 @@ export function WeeklyRing({ count, goal, weekEndedUnmet }: { count: number; goa
           <Text style={[textStyles.ringNumber.style, { color: colors.text.primary.hex }]}>
             {numeral}
           </Text>
-          <Text style={[textStyles.label.style, { color: colors.text.secondary.hex, marginTop: spacing.xs }]}>
-            MY WEEK
+          <Text style={[textStyles.label.style, { color: centerLabelColor, marginTop: spacing.xs }]}>
+            {centerLabel}
           </Text>
         </View>
       </View>
