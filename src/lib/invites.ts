@@ -165,14 +165,16 @@ export async function lookupInvite(code: string): Promise<PendingInviteInfo> {
   if (supabase) {
     const { data, error } = await supabase.rpc('get_invite', { p_token: normalized });
     if (!error && data) {
-      const parsed = (
+      // get_invite (schema.sql) returns jsonb with SNAKE_CASE keys
+      // (inviter_name, inviter_has_logs) — not the camelCase InviteInfo shape.
+      const row = (
         typeof data === 'string' ? (JSON.parse(data) as unknown) : data
-      ) as Partial<PendingInviteInfo>;
-      if (parsed?.found) {
+      ) as { found?: boolean; inviter_name?: string | null; inviter_has_logs?: boolean };
+      if (row?.found) {
         return {
           found: true,
-          inviterName: parsed.inviterName ?? 'Your partner',
-          inviterHasLogs: parsed.inviterHasLogs ?? false,
+          inviterName: row.inviter_name ?? 'Your partner',
+          inviterHasLogs: row.inviter_has_logs ?? false,
         };
       }
     }
