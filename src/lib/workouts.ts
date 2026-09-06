@@ -81,6 +81,36 @@ export interface WeeklyContext {
    * badge, no shaming copy — passive feed surface only.
    */
   partnerMissCard: { kind: 'partnerMiss'; promise: string } | null;
+  /**
+   * V1.1 Build #4 — week recap state. ONE card at week rollover, personal
+   * results only (no history, no browsing): `{ own, partner }` counts for the
+   * most recent FULLY-elapsed week, or null when the week isn't elapsed yet or
+   * there is no recorded evidence. Read-only summaries of Build #1 snapshots
+   * (computed fallback when a snapshot is missing); computed in
+   * `fetchWeeklyContext` via weekRecap.ts. Home shows it once per completed
+   * week (dismissal persists per user+week in AsyncStorage).
+   */
+  weekRecap: WeekRecap | null;
+}
+
+/** One side of the week recap: plain counts + completion. */
+export interface RecapSide {
+  count: number;
+  goal: number;
+  completed: boolean;
+}
+
+/** The most recent fully-elapsed week's recap (Build #4, weekRecap.ts). */
+export interface WeekRecap {
+  /** ISO start of the completed week (also the dismissal key suffix). */
+  weekStartAt: string;
+  weekEndAt: string;
+  own: RecapSide;
+  /** Null when solo (no accepted partner). */
+  partner: RecapSide | null;
+  partnerId: string | null;
+  /** Partner's real first name (UI may prefer the local pet-name display name). */
+  partnerFirstName: string | null;
 }
 
 const DAY_INDEX: Record<string, number> = {

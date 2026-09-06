@@ -69,6 +69,7 @@ const model = {
   notifications: require(path.join(compRoot, 'notifications.js')),
   pushRegistration: require(path.join(compRoot, 'pushRegistration.js')),
   pushDispatch: require(path.join(compRoot, 'pushDispatch.js')),
+  weekRecap: require(path.join(compRoot, 'weekRecap.js')),
 };
 const { devMock, DEV_PAIR_GROUP_ID } = model.mock;
 const { authenticate, getStoredSession } = model.supabase;
@@ -77,7 +78,7 @@ const { weekStartFor } = model.workouts;
 const { getOrCreateInviteCode, lookupInvite, acceptInvite, unpair } = model.invites;
 const { commitOnboarding } = model.settings;
 const { setPetName, getPetName, setTeamName } = model.naming;
-const { finalizePreviousWeek } = model.weeklyResults;
+const { finalizePreviousWeek, previousWeekRange } = model.weeklyResults;
 const { getMissPromise, setMissPromise, hasSeenMissPrompt, markMissPromptSeen, clearMissPromptSeen } = model.missPromise;
 const { getNotificationPrefs, setNotificationPref, defaultNotificationPrefs, NOTIFICATION_DEFAULTS } = model.notificationPrefs;
 const {
@@ -89,6 +90,16 @@ const {
   refreshPushRegistrationIfGranted,
 } = model.notifications;
 const { registerPushDevice, getPushDeviceToken } = model.pushRegistration;
+const {
+  getRecapForLastCompletedWeek,
+  getVisibleRecap,
+  isRecapDismissed,
+  dismissRecap,
+  recapHeadline,
+  recapOwnLine,
+  recapPartnerLine,
+  RECAP_FORWARD_LINE,
+} = model.weekRecap;
 const {
   dispatchPush,
   dispatchPartnerLogged,
@@ -825,6 +836,141 @@ await step('p. Push copy EXACT strings + partner_logged fires from logWorkout; i
   ok(resBOpen.every((r) => r.status === 'skipped' || r.status === 'suppressed'), `B open should never SEND (no own pending invites): ${JSON.stringify(resBOpen)}`);
 
   console.log(`        copy exact; logWorkout → partner_logged row (dedupe by workout id); accept → invite_accepted row; B never sends pending_invite`);
+});
+
+await step('q. Week recap: elapsed-week A 2/goal + B 3/goal snapshots → both exposed; dismiss persists; next week re-arms; no-snapshot fallback; solo own-only; never crashes', async () => {
+  // Step p ends paired (B accepted A's fresh code), session = B.
+  const resAuthAq = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthAq.ok, `re-auth A (step q) failed: ${resAuthAq.error}`);
+  const uidA = userA.id;
+  const uidB = userB.id;
+  const ctxQ0 = await fetchWeeklyContext();
+  ok(ctxQ0.ok && ctxQ0.context.hasPartner === true, 'A should be paired at step q start');
+  // Fixture a FULLY-ELAPSED week for A's own week-start day (A onboarded Wed:
+  // previousWeekRange(real-now, 'Wed') = [Wed Aug 26, Wed Sep 2)). The direct
+  // weeklyResults helper is the range authority — clear both sides' snapshots
+  // first (steps k/l/m wrote rows on nearby keys), then write:
+  //   A → 2/3 (missed), B → 3/3 (complete) — same week_start_at on the pair
+  //   group, mimicking finalize-on-fetch for two members.
+  await devMock.clearResults(uidA);
+  await devMock.clearResults(uidB);
+  const rangeA = previousWeekRange(new Date(), 'Wed');
+  ok(rangeA !== null && new Date() >= rangeA.end, 'A previous week should be fully elapsed at real-now');
+  const startIso = rangeA.start.toISOString();
+  const endIso = rangeA.end.toISOString();
+  await devMock.saveResult(uidA, {
+    user_id: uidA,
+    group_id: DEV_PAIR_GROUP_ID,
+    week_start_at: startIso,
+    week_end_at: endIso,
+    weekly_goal_snapshot: 3,
+    workout_count: 2,
+    completed: false,
+    nudge_present: false,
+  });
+  await devMock.saveResult(uidB, {
+    user_id: uidB,
+    group_id: DEV_PAIR_GROUP_ID,
+    week_start_at: startIso,
+    week_end_at: endIso,
+    weekly_goal_snapshot: 3,
+    workout_count: 3,
+    completed: true,
+    nudge_present: false,
+  });
+  // 1) Recap exposes BOTH sides (A missed 2/3 → missed; B completed 3/3).
+  const recap = await getRecapForLastCompletedWeek(new Date());
+  ok(recap !== null, 'recap should exist for the elapsed fixture week');
+  ok(recap.weekStartAt === startIso, `recap weekStartAt = ${recap.weekStartAt} (expected ${startIso})`);
+  ok(recap.own.count === 2 && recap.own.goal === 3 && recap.own.completed === false, `own side = ${JSON.stringify(recap.own)} (expected 2/3 missed)`);
+  ok(recap.partner !== null && recap.partner.count === 3 && recap.partner.goal === 3 && recap.partner.completed === true, `partner side = ${JSON.stringify(recap.partner)} (expected 3/3 complete)`);
+  ok(recap.partnerId === uidB, `partnerId = ${recap.partnerId} (expected B)`);
+  // 2) Copy anchors: own-first missed line is plain; partner line is plain
+  //    counts; completed own week gets the single celebration; the forward
+  //    line is the one gentle constant.
+  ok(recapOwnLine(recap.own) === 'You: 2 of 3', `missed own line: ${recapOwnLine(recap.own)}`);
+  ok(recapOwnLine({ count: 3, goal: 3, completed: true }) === 'You: 3 of 3 — Week complete 🎉', 'completed own line copy mismatch');
+  ok(recapPartnerLine('bri.smoke', recap.partner) === 'bri.smoke: 3 of 3', `partner line: ${recapPartnerLine('bri.smoke', recap.partner)}`);
+  ok(typeof recapHeadline(recap.weekStartAt) === 'string' && recapHeadline(recap.weekStartAt).length > 0, 'headline should be a non-empty string');
+  ok(RECAP_FORWARD_LINE === 'New week, fresh ring.', `forward line: ${RECAP_FORWARD_LINE}`);
+  // 3) Visible recap + weekly context agree; then dismiss persists (per
+  //    user+week) — the next fetch suppresses the card.
+  const visible = await getVisibleRecap(new Date());
+  ok(visible !== null && visible.weekStartAt === startIso, 'visible recap should exist before dismissal');
+  const ctxQ = await fetchWeeklyContext();
+  ok(ctxQ.ok && ctxQ.context.weekRecap !== null && ctxQ.context.weekRecap.weekStartAt === startIso, 'weekly context should carry the recap before dismissal');
+  ok(ctxQ.context.weekRecap.own.count === 2 && ctxQ.context.weekRecap.partner?.count === 3, 'context recap counts should match the fixture');
+  ok((await isRecapDismissed(startIso)) === false, 'recap should not be dismissed yet');
+  await dismissRecap(startIso);
+  ok((await isRecapDismissed(startIso)) === true, 'dismissal should persist for this user+week');
+  ok((await getVisibleRecap(new Date())) === null, 'visible recap should be null after dismissal');
+  const ctxQd = await fetchWeeklyContext();
+  ok(ctxQd.ok && ctxQd.context.weekRecap === null, 'weekly context should suppress the dismissed recap');
+  // 4) Next-week re-arm: a NEW completed week (one week later) gets a fresh
+  //    card even though the old week was dismissed.
+  await devMock.saveResult(uidA, {
+    user_id: uidA,
+    group_id: DEV_PAIR_GROUP_ID,
+    week_start_at: new Date(rangeA.start.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    week_end_at: new Date(rangeA.end.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    weekly_goal_snapshot: 3,
+    workout_count: 3,
+    completed: true,
+    nudge_present: false,
+  });
+  const nextNow = new Date(rangeA.end.getTime() + 8 * 24 * 60 * 60 * 1000);
+  const recapNext = await getRecapForLastCompletedWeek(nextNow);
+  ok(recapNext !== null && recapNext.weekStartAt !== startIso, 'next completed week should produce a NEW recap');
+  ok((await isRecapDismissed(recapNext.weekStartAt)) === false, 'new week must re-arm (not dismissed)');
+  ok(recapNext.own.completed === true, 'next-week own side should be the completed fixture (3/3)');
+  // 5) No-snapshot first-week fallback: with NO snapshots at all, logs inside
+  //    the elapsed range still produce a recap (computed fallback); with no
+  //    logs either, a brand-new user gets null — never a crash.
+  await devMock.clearResults(uidA);
+  await devMock.clearResults(uidB);
+  await devMock.saveWorkouts(uidA, []);
+  await devMock.saveWorkouts(uidB, []);
+  const mid = new Date(rangeA.start.getTime() + 3 * 24 * 60 * 60 * 1000);
+  await devMock.pushWorkout(uidA, {
+    id: 'w_recap_q_a1',
+    user_id: uidA,
+    group_id: DEV_PAIR_GROUP_ID,
+    photo_path: 'spotter-dev-mock-photos/q-a1.jpg',
+    logged_at: mid.toISOString(),
+    workout_type: 'Run',
+    created_at: mid.toISOString(),
+  });
+  await devMock.pushWorkout(uidA, {
+    id: 'w_recap_q_a2',
+    user_id: uidA,
+    group_id: DEV_PAIR_GROUP_ID,
+    photo_path: 'spotter-dev-mock-photos/q-a2.jpg',
+    logged_at: new Date(mid.getTime() + 3600_000).toISOString(),
+    workout_type: 'Lift',
+    created_at: new Date(mid.getTime() + 3600_000).toISOString(),
+  });
+  const fallbackRecap = await getRecapForLastCompletedWeek(new Date());
+  ok(fallbackRecap !== null && fallbackRecap.own.count === 2, `fallback recap own count = ${fallbackRecap?.own.count} (expected 2 computed logs)`);
+  // 6) Solo user gets own-only: unpair, then the recap has partner === null.
+  const unQ = await unpair();
+  ok(unQ.ok, `unpair (step q) failed: ${unQ.error}`);
+  const soloCtx = await fetchWeeklyContext();
+  ok(soloCtx.ok && soloCtx.context.hasPartner === false, 'A should be solo after unpair');
+  const soloRecap = await getRecapForLastCompletedWeek(new Date());
+  ok(soloRecap !== null && soloRecap.partner === null && soloRecap.partnerId === null, 'solo recap must be own-only (partner null)');
+  ok(soloRecap.own.count === 2, `solo recap own count = ${soloRecap.own.count} (expected 2)`);
+  // Re-pair for a clean landing (step-j pattern): A generates a fresh code,
+  // B accepts; session returns to B so the end state matches step p's.
+  await removeItem('spotter.invite:v1');
+  const freshQ = await getOrCreateInviteCode();
+  ok(/^DEV-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(freshQ.displayCode), `fresh code format: ${freshQ.displayCode}`);
+  const resAuthBq = await authenticate(B_EMAIL, 'pass5678');
+  ok(resAuthBq.ok, `re-auth B (re-pair, step q) failed: ${resAuthBq.error}`);
+  const accQ = await acceptInvite(freshQ.displayCode);
+  ok(accQ.ok, `re-pair accept (step q) failed: ${accQ.error}`);
+  const ctxQPair = await fetchWeeklyContext();
+  ok(ctxQPair.ok && ctxQPair.context.hasPartner === true, 'A+B should be re-paired at step q end');
+  console.log(`        A 2/3 + B 3/3 snapshots → both exposed; dismiss persists; next week re-arms; fallback works; solo own-only; re-paired`);
 });
 
 console.log('');

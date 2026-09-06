@@ -27,6 +27,13 @@ import { InviteSheet } from '@/features/invites/InviteSheet';
 import { MissSetupSheet } from '@/features/invites/MissSetupSheet';
 import { NotificationsSheet } from '@/features/invites/NotificationsSheet';
 import { hasSeenMissPrompt } from '@/lib/missPromise';
+import {
+  dismissRecap,
+  recapHeadline,
+  recapOwnLine,
+  recapPartnerLine,
+  RECAP_FORWARD_LINE,
+} from '@/lib/weekRecap';
 import { shouldAskNotificationPermission, refreshPushRegistrationIfGranted, subscribePushDispatchForeground } from '@/lib/notifications';
 import { colors, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
@@ -183,6 +190,17 @@ export default function HomeScreen() {
   // shown ONLY when THIS user missed the PREVIOUS week AND set a miss promise.
   const ownMissLine = ctx?.missLine?.kind === 'ownMiss' ? ctx.missLine.promise : null;
 
+  // V1.1 Build #4 — week recap: ONE muted card at week rollover (personal
+  // results only). Context already suppresses dismissed weeks, so the ✕ only
+  // persists the dismissal and hides the card locally for instant feedback.
+  const weekRecap = ctx?.weekRecap ?? null;
+  const handleDismissRecap = useCallback(() => {
+    if (!weekRecap) return;
+    const key = weekRecap.weekStartAt;
+    void dismissRecap(key);
+    setCtx((prev) => (prev ? { ...prev, weekRecap: null } : prev));
+  }, [weekRecap]);
+
   // V1.1 Build #2 (M slice): partner MissCard — one muted card at the top of
   // the feed, shown ONLY when the partner missed THEIR previous week AND set
   // a miss promise. Neutral, never shaming; no streak/guilt language.
@@ -272,6 +290,43 @@ export default function HomeScreen() {
             </>
           )}
         </View>
+
+        {/* Week recap (v1.1 Build #4): ONE muted card at week rollover, above
+            the ring-adjacent content and below the own-miss whisper. Own result
+            first (celebration only when completed), then the partner's plain
+            counts when paired. One gentle forward line on a missed own week.
+            No streaks, no shaming, no comparison commentary. */}
+        {weekRecap && (
+          <View style={styles.recapCard} accessibilityRole="text" accessibilityLabel="Last week recap">
+            <View style={styles.recapHeaderRow}>
+              <Text style={[textStyles.label.style, { color: colors.text.muted.hex }]}>
+                {recapHeadline(weekRecap.weekStartAt)}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss recap"
+                onPress={handleDismissRecap}
+                hitSlop={12}
+                style={styles.recapDismiss}
+              >
+                <Ionicons name="close" size={16} color={colors.text.muted.hex} />
+              </Pressable>
+            </View>
+            <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex }]}>
+              {recapOwnLine(weekRecap.own)}
+            </Text>
+            {weekRecap.partner && (
+              <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex }]}>
+                {recapPartnerLine(partnerDisplayName ?? weekRecap.partnerFirstName ?? 'Partner', weekRecap.partner)}
+              </Text>
+            )}
+            {!weekRecap.own.completed && (
+              <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+                {RECAP_FORWARD_LINE}
+              </Text>
+            )}
+          </View>
+        )}
 
         {error && (
           <Text style={[textStyles.caption.style, { color: colors.text.danger.hex, textAlign: 'center', marginTop: spacing.sm }]}>
@@ -408,6 +463,21 @@ const styles = StyleSheet.create({
   ringBlock: { alignItems: 'center', marginTop: spacing.sm, marginBottom: spacing.sm },
   ringLoading: { height: 132, justifyContent: 'center' },
   missLine: { marginTop: spacing.sm, gap: spacing.xs, paddingHorizontal: spacing.lg },
+  recapCard: {
+    gap: spacing.xs,
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.background.raised.hex,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  recapHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  recapDismiss: { padding: spacing.xs },
   missCard: {
     gap: spacing.xs,
     padding: spacing.md,

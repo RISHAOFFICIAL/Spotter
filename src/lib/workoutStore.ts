@@ -21,6 +21,7 @@ import { track } from './analytics';
 import { maybeFinalizePreviousWeek, previousWeekRange, countInRange } from './weeklyResults';
 import { getPetName } from './naming';
 import { getMissPromise, getPartnerMissPromise } from './missPromise';
+import { getRecapForLastCompletedWeek, isRecapDismissed } from './weekRecap';
 import { getStoredSession, supabase } from './supabase';
 import { createSignedUrls } from './storage';
 import { notifyPartnerLogged } from './pushDispatch';
@@ -237,6 +238,23 @@ async function wasPreviousWeekMissed(userId: string): Promise<boolean> {
   return wasPreviousWeekMissedFor(userId);
 }
 
+/**
+ * Week recap state (v1.1 Build #4): the most recent FULLY-elapsed week's
+ * snapshot-preferred, computed-fallback counts for self (+ partner when
+ * paired). Suppressed when this user+week was dismissed. Never fails the
+ * weekly context — a summary card must never break Home.
+ */
+async function computeWeekRecap(): Promise<WeeklyContext['weekRecap']> {
+  try {
+    const recap = await getRecapForLastCompletedWeek(new Date());
+    if (!recap) return null;
+    if (await isRecapDismissed(recap.weekStartAt)) return null;
+    return recap;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Weekly context (the single query — home-screen.md §8)
 // ---------------------------------------------------------------------------
@@ -360,6 +378,7 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
           partnerProfile?.week_start_day ?? null,
           partnerProfile?.weekly_goal ?? 3,
         ),
+        weekRecap: await computeWeekRecap(),
       },
     };
   }
@@ -495,6 +514,7 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
       weekEndedUnmet: now >= weekEnd && ownWeek.length < weeklyGoal,
       missLine: await computeOwnMissLine(session.user.id),
       partnerMissCard: await computePartnerMissCard(partnerId, pairGroupId, partnerWeekStartDay, partnerGoal),
+      weekRecap: await computeWeekRecap(),
     },
   };
 }

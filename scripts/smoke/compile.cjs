@@ -28,6 +28,7 @@ const FILES = [
   'src/lib/notifications.ts',
   'src/lib/pushRegistration.ts',
   'src/lib/pushDispatch.ts',
+  'src/lib/weekRecap.ts',
 ];
 
 function stripUnused(moduleMap) {
