@@ -60,17 +60,18 @@ async function findPairGroupId(): Promise<string | null> {
 }
 
 /**
- * Read THIS user's own miss promise (''/null when unset or cleared). Only the
- * owner's own value: REAL mode reads their OWN membership row (own-row RLS);
- * DEV reads the per-user key. The partner's promise is never read in this
- * build (Build #2 S slice — partner MissCard comes later).
+ * Read the CURRENT user's own miss promise (''/null when unset or cleared).
+ * Session-scoped like the other lib accessors (naming.ts): REAL mode reads the
+ * caller's OWN membership row (own-row RLS); DEV reads the per-user key. The
+ * partner's promise is never read in this build (Build #2 S slice — partner
+ * MissCard comes later).
  */
-export async function getMissPromise(userId?: string): Promise<string | null> {
-  const session = userId ? null : await getStoredSession();
-  const uid = userId ?? session?.user.id ?? '';
-  if (!uid) return null;
+export async function getMissPromise(): Promise<string | null> {
+  const session = await getStoredSession();
+  if (!session) return null;
+  const uid = session.user.id;
 
-  if (session?.isDevMode || !supabase || !session) {
+  if (session.isDevMode || !supabase) {
     return devMock.getMissPromise(uid);
   }
 
@@ -80,7 +81,6 @@ export async function getMissPromise(userId?: string): Promise<string | null> {
       .from('memberships')
       .select('miss_promise')
       .eq('user_id', uid)
-      .not('miss_promise', 'is', null)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();

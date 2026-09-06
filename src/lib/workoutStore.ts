@@ -98,13 +98,13 @@ function rowToLog(row: WorkoutRow, photoUri: string, authorName: string): Workou
 // ---------------------------------------------------------------------------
 
 /**
- * Does THIS user have a miss promise whose previous week was missed, and what
- * is the promise text to show? Reads only the caller's OWN promise — the
+ * Does the CURRENT user have a miss promise whose previous week was missed, and
+ * what is the promise text to show? Reads only the caller's OWN promise — the
  * partner's promise is never surfaced in this slice.
  */
 async function computeOwnMissLine(userId: string): Promise<{ kind: 'ownMiss'; promise: string } | null> {
   try {
-    const promise = await getMissPromise(userId);
+    const promise = await getMissPromise();
     const missed = await wasPreviousWeekMissed(userId);
     if (missed && promise) return { kind: 'ownMiss', promise };
   } catch {
