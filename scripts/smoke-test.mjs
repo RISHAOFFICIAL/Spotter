@@ -63,13 +63,16 @@ const model = {
   workouts: require(path.join(compRoot, 'workouts.js')),
   settings: require(path.join(compRoot, 'settings.js')),
   naming: require(path.join(compRoot, 'naming.js')),
+  weeklyResults: require(path.join(compRoot, 'weeklyResults.js')),
 };
 const { devMock, DEV_PAIR_GROUP_ID } = model.mock;
 const { authenticate, getStoredSession } = model.supabase;
 const { fetchWeeklyContext, logWorkout } = model.workoutStore;
+const { weekStartFor } = model.workouts;
 const { getOrCreateInviteCode, lookupInvite, acceptInvite, unpair } = model.invites;
 const { commitOnboarding } = model.settings;
 const { setPetName, getPetName, setTeamName } = model.naming;
+const { finalizePreviousWeek } = model.weeklyResults;
 
 console.log(`SPOTTER MVP two-user smoke test (dev mock)  [${RUN_ID}]`);
 console.log('');
@@ -291,6 +294,46 @@ await step('j. Unpair: both sides return to solo, own logs intact, re-pair works
   ok(ctxA.context.partner?.id === userB.id, `A partner after re-pair = ${ctxA.context.partner?.id}`);
 
   console.log(`        A+B unpair → both solo, logs kept, fresh-code re-pair works`);
+});
+
+await step('k. Weekly results snapshot: fully-elapsed week finalizes one row, idempotent', async () => {
+  // Session is A (restored at the end of step j). A is re-paired with B here.
+  const resAuthA4 = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthA4.ok, `re-auth A (step k) failed: ${resAuthA4.error}`);
+  let ctx = await fetchWeeklyContext();
+  ok(ctx.context.hasPartner === true, 'A should be paired before weekly finalize');
+
+  // Use A's own reported week-start day to stay consistent with the app logic.
+  const weekStartDay = ctx.context.weekStartDay;
+  const nowRef = new Date();
+  const curStart = weekStartFor(nowRef, weekStartDay);
+  ok(!Number.isNaN(curStart.getTime()), 'A weekly context should expose a parseable week start');
+
+  // Time-travel: "now" = 8 days after the CURRENT week start, so the current
+  // week (the one containing A's step-c log) is fully elapsed and becomes the
+  // PREVIOUS week. Direct call (no clock injection) with A's goal.
+  const elapsedNow = new Date(curStart.getTime() + 8 * 24 * 60 * 60 * 1000);
+  const first = await finalizePreviousWeek(elapsedNow, weekStartDay, ctx.context.weeklyGoal, DEV_PAIR_GROUP_ID);
+  ok(first.ok, `first finalize failed: ${first.error}`);
+  ok(first.finalized === true, 'first finalize should write a NEW snapshot row');
+
+  // Idempotency: the same week must not double-write.
+  const second = await finalizePreviousWeek(elapsedNow, weekStartDay, ctx.context.weeklyGoal, DEV_PAIR_GROUP_ID);
+  ok(second.ok, `second finalize failed: ${second.error}`);
+  ok(second.finalized === false, 'second finalize of the same week should be a no-op');
+
+  // Verify the dev-mock row is actually persisted and shape-correct.
+  const results = await devMock.listResults(userA.id);
+  const snap = results.find(
+    (r) => r.group_id === DEV_PAIR_GROUP_ID && r.week_start_at === first.result.week_start_at,
+  );
+  ok(snap !== undefined, 'weekly_results dev-mock row should exist after elapsed week');
+  ok(snap.workout_count === 1, `snapshot count = ${snap.workout_count} (expected 1: A's step-c log)`);
+  ok(snap.weekly_goal_snapshot === ctx.context.weeklyGoal, `goal snapshot = ${snap.weekly_goal_snapshot}`);
+  ok(snap.completed === (snap.workout_count >= snap.weekly_goal_snapshot), 'completed flag should match count vs goal');
+  ok(snap.nudge_present === false, 'nudge_present should be false in v1.1 Build #1');
+
+  console.log(`        weekly_results: count=1 goal=${snap.weekly_goal_snapshot} completed=${snap.completed}`);
 });
 
 console.log('');

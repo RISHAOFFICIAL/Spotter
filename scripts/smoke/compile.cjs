@@ -14,6 +14,8 @@ const OUT = path.join(ROOT, 'scripts', 'smoke', '.compiled');
 
 const FILES = [
   'src/lib/mock.ts',
+  'src/lib/analytics.ts',
+  'src/lib/weeklyResults.ts',
   'src/lib/invites.ts',
   'src/lib/supabase.ts',
   'src/lib/workouts.ts',
