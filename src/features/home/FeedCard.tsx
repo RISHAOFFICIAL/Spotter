@@ -23,6 +23,13 @@ import { relativeLogTime, type WorkoutLog } from '@/lib/workouts';
 import { useAuth } from '@/features/auth/AuthProvider';
 import { removeWorkout } from '@/lib/workoutStore';
 
+/** Capture time-of-day ("3:14p") for the proof timestamp (home-screen.md §4). */
+function captureTime(iso: string): string {
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return '';
+  return t.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
 /** Owner-only "Remove photo" — see compliance brief #2 §5. */
 export function FeedCard({ log, now }: { log: WorkoutLog; now: Date }) {
   const { session } = useAuth();
@@ -79,7 +86,13 @@ export function FeedCard({ log, now }: { log: WorkoutLog; now: Date }) {
               {log.authorName}
             </Text>
             {hasPhoto && (
-              <Ionicons name="checkmark-circle" size={14} color={colors.status.success.hex} accessibilityLabel="Photo verified" />
+              <>
+                <View style={styles.liveBadge}>
+                  <Ionicons name="radio" size={9} color={colors.brand.primary.hex} />
+                  <Text style={[textStyles.label.style, styles.liveBadgeText]}>Live</Text>
+                </View>
+                <Ionicons name="checkmark-circle" size={14} color={colors.status.success.hex} accessibilityLabel="Photo verified" />
+              </>
             )}
             {/* Owner-only overflow control (non-destructive; confirm step inside). */}
             {isOwner && !removed && (
@@ -107,9 +120,14 @@ export function FeedCard({ log, now }: { log: WorkoutLog; now: Date }) {
               <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex }]} numberOfLines={1}>
                 {typeLabel}
               </Text>
-              <Text style={[textStyles.label.style, { color: colors.text.muted.hex }]}>
-                {relativeLogTime(log.loggedAt, now)}
-              </Text>
+              <View style={styles.metaRow}>
+                <Text style={[textStyles.label.style, { color: colors.text.muted.hex }]}>
+                  {relativeLogTime(log.loggedAt, now)}
+                </Text>
+                <Text style={[textStyles.label.style, { color: colors.text.muted.hex }]}>
+                  {captureTime(log.loggedAt)}
+                </Text>
+              </View>
             </>
           )}
         </View>
@@ -151,6 +169,19 @@ const styles = StyleSheet.create({
   right: { flex: 1, gap: spacing.xs * 2, paddingTop: spacing.xs },
   rowTop: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   author: { flex: 1, color: colors.text.primary.hex },
+  liveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 6,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 1,
+    borderColor: 'rgba(198,241,53,0.35)',
+    backgroundColor: 'rgba(198,241,53,0.10)',
+  },
+  liveBadgeText: { color: colors.brand.primary.hex },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   more: {
     width: 32,
     height: 32,

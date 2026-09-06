@@ -47,20 +47,20 @@ import { colors, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
 import { logWorkout, type NewWorkout } from '@/lib/workoutStore';
 import { WORKOUT_TYPES, type WorkoutType, type WorkoutLog } from '@/lib/workouts';
-import { useAuth } from '@/features/auth/AuthProvider';
 
-type Stage = 'camera' | 'confirm' | 'saving';
+type Stage = 'camera' | 'confirm' | 'saving' | 'done';
 
 interface Props {
   visible: boolean;
   onClose: () => void;
+  /** Accepted partner's first name (null while solo) — drives the privacy line. */
+  partnerName?: string;
   /** Called with the logged workout — Home prepends it optimistically. */
   onLogged: (log: WorkoutLog) => void;
 }
 
-export function LogSheet({ visible, onClose, onLogged }: Props) {
+export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
   const insets = useSafeAreaInsets();
-  const { isDevMode } = useAuth();
   const [permission, requestPermission] = useCameraPermissions();
 
   const [stage, setStage] = useState<Stage>('camera');
@@ -69,6 +69,7 @@ export function LogSheet({ visible, onClose, onLogged }: Props) {
   const [error, setError] = useState<string | null>(null);
   const cameraRef = useRef<CameraView>(null);
   const busy = useRef(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saving = stage === 'saving';
 
   // Reset on open (permission stays OS-level; only the sheet state resets).
@@ -78,6 +79,9 @@ export function LogSheet({ visible, onClose, onLogged }: Props) {
     setCaptured(null);
     setWorkoutType(null);
     setError(null);
+    return () => {
+      if (closeTimer.current) clearTimeout(closeTimer.current);
+    };
   }, [visible]);
 
   const close = useCallback(() => {
@@ -114,6 +118,7 @@ export function LogSheet({ visible, onClose, onLogged }: Props) {
   }, [permission?.granted, requestPermission]);
 
   const logIt = useCallback(async () => {
+    // Double-tap guard: busy.current + the `saving` stage both gate this path.
     if (busy.current || !captured) return;
     busy.current = true;
     setStage('saving');
@@ -128,7 +133,12 @@ export function LogSheet({ visible, onClose, onLogged }: Props) {
       return;
     }
     onLogged(res.log);
-    onClose();
+    // Brief confirmation before closing ("Added to your week" / "Shared with X").
+    setStage('done');
+    closeTimer.current = setTimeout(() => {
+      setStage('camera');
+      onClose();
+    }, 1400);
   }, [captured, workoutType, onLogged, onClose]);
 
   const isFirstRun = !permission?.granted;
@@ -165,8 +175,8 @@ export function LogSheet({ visible, onClose, onLogged }: Props) {
 
             <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
               <View style={styles.privacyLine}>
-                <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
-                  Photo is for your partner.
+                <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex, textAlign: 'center' }]}>
+                  {partnerName ? `Only ${partnerName} will see this.` : 'Only your partner will see this.'}
                 </Text>
                 <Text style={[textStyles.label.style, { color: colors.text.muted.hex, textAlign: 'center', marginTop: spacing.xs }]}>
                   Your photos are sealed to your account — only you and your partner can ever see them.
@@ -199,6 +209,20 @@ export function LogSheet({ visible, onClose, onLogged }: Props) {
               )}
             </View>
           </>
+        )}
+
+        {stage === 'done' && (
+          <View style={styles.doneWrap}>
+            <Ionicons name="checkmark-circle" size={64} color={colors.status.success.hex} />
+            <Text style={[textStyles.bodyStrong.style, { color: colors.text.primary.hex, textAlign: 'center' }]}>
+              Added to your week
+            </Text>
+            {partnerName ? (
+              <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex, textAlign: 'center' }]}>
+                Shared with {partnerName}
+              </Text>
+            ) : null}
+          </View>
         )}
 
         {stage === 'confirm' && captured && (
@@ -263,11 +287,6 @@ export function LogSheet({ visible, onClose, onLogged }: Props) {
   );
 }
 
-/** Captured-photo preview via expo-image (fast, local content URI ok). */
-function CameraPreview({ uri }: { uri: string }) {
-  return <Image source={{ uri }} style={styles.preview} contentFit="cover" />;
-}
-
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background.base.hex },
   cameraWrap: { flex: 1, backgroundColor: '#000' },
@@ -312,6 +331,13 @@ const styles = StyleSheet.create({
   cancelBtn: { alignItems: 'center', justifyContent: 'center', width: 64 },
   previewWrap: { flex: 1, backgroundColor: '#000' },
   preview: { flex: 1 },
+  doneWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.md,
+    paddingHorizontal: spacing.xxxl,
+  },
   chipRow: { gap: spacing.sm, paddingVertical: spacing.xs },
   chip: {
     height: 36,
