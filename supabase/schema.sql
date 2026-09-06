@@ -686,6 +686,10 @@ create table if not exists public.notification_preferences (
   invite_accepted_enabled boolean not null default true,
   partner_logged_enabled boolean not null default true,
   missed_week_enabled boolean not null default false,
+  -- Build #3: pending-invite reminder to the INVITER (~48h, capped, never
+  -- notifies the invitee; owner-ratified 2026-09-06). Additive nullable column
+  -- so pre-existing rows get the default on read without a data migration.
+  pending_invite_enabled boolean not null default true,
   updated_at timestamptz not null default now()
 );
 

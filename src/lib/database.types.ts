@@ -256,6 +256,7 @@ export interface Database {
           invite_accepted_enabled: boolean;
           partner_logged_enabled: boolean;
           missed_week_enabled: boolean;
+          pending_invite_enabled: boolean;
           updated_at: string;
         };
         Insert: {
@@ -264,6 +265,7 @@ export interface Database {
           invite_accepted_enabled?: boolean;
           partner_logged_enabled?: boolean;
           missed_week_enabled?: boolean;
+          pending_invite_enabled?: boolean;
           updated_at?: string;
         };
         Update: {
@@ -272,6 +274,7 @@ export interface Database {
           invite_accepted_enabled?: boolean;
           partner_logged_enabled?: boolean;
           missed_week_enabled?: boolean;
+          pending_invite_enabled?: boolean;
           updated_at?: string;
         };
         Relationships: [];
