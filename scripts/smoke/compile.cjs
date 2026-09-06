@@ -24,6 +24,9 @@ const FILES = [
   'src/lib/workoutStore.ts',
   'src/lib/naming.ts',
   'src/lib/missPromise.ts',
+  'src/lib/notificationPrefs.ts',
+  'src/lib/notifications.ts',
+  'src/lib/pushRegistration.ts',
 ];
 
 function stripUnused(moduleMap) {

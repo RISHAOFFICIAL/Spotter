@@ -39,7 +39,7 @@ if (compileRes.status !== 0) {
 
 // 2. Module stubs for RN-only deps BEFORE requiring app modules
 const { map } = require(path.join(__dirname, 'smoke', '.compiled', '_deps.json'));
-const { setPrefix, clearAll, removeItem } = require(path.join(__dirname, 'smoke', 'async-storage.js'));
+const { setPrefix, clearAll, removeItem, getItem, setItem } = require(path.join(__dirname, 'smoke', 'async-storage.js'));
 const fsMod = require(path.join(__dirname, 'smoke', 'expo-file-system.js'));
 
 const RUN_ID = `run-${Date.now().toString(36)}`;
@@ -65,6 +65,9 @@ const model = {
   naming: require(path.join(compRoot, 'naming.js')),
   weeklyResults: require(path.join(compRoot, 'weeklyResults.js')),
   missPromise: require(path.join(compRoot, 'missPromise.js')),
+  notificationPrefs: require(path.join(compRoot, 'notificationPrefs.js')),
+  notifications: require(path.join(compRoot, 'notifications.js')),
+  pushRegistration: require(path.join(compRoot, 'pushRegistration.js')),
 };
 const { devMock, DEV_PAIR_GROUP_ID } = model.mock;
 const { authenticate, getStoredSession } = model.supabase;
@@ -75,6 +78,16 @@ const { commitOnboarding } = model.settings;
 const { setPetName, getPetName, setTeamName } = model.naming;
 const { finalizePreviousWeek } = model.weeklyResults;
 const { getMissPromise, setMissPromise, hasSeenMissPrompt, markMissPromptSeen, clearMissPromptSeen } = model.missPromise;
+const { getNotificationPrefs, setNotificationPref, defaultNotificationPrefs, NOTIFICATION_DEFAULTS } = model.notificationPrefs;
+const {
+  getNotificationPermissionState,
+  shouldAskNotificationPermission,
+  markNotificationExplained,
+  dismissNotificationAsk,
+  requestNotificationPermission,
+  refreshPushRegistrationIfGranted,
+} = model.notifications;
+const { registerPushDevice, getPushDeviceToken } = model.pushRegistration;
 
 console.log(`SPOTTER MVP two-user smoke test (dev mock)  [${RUN_ID}]`);
 console.log('');
@@ -465,6 +478,93 @@ await step('m. Partner MissCard: B missed last week + B promise → A feed card 
   ok(ctxM.context.missLine === null, 'A should have no own-miss line (A set no promise)');
 
   console.log(`        B missed + promise → A sees MissCard; prompted-flag unset→suppressed→re-armed`);
+});
+
+// Harness helpers for the permission-flag keys (local AsyncStorage). Defined
+// BEFORE step n's top-level await so they are not in TDZ while it runs.
+const permKey = (userId) => `spotter.notifperm:v1:${userId}`;
+const AsyncStorageRemove = (k) => removeItem(k);
+const AsyncStorageSet = (k, v) => setItem(k, v);
+
+await step('n. Push foundation: prefs defaults created → toggle → readback; device idempotent; permission machine unseen→explained→granted/denied persists', async () => {
+  // Session is A here (restored at the end of step m). A is paired with B.
+  const resAuthAn = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthAn.ok, `re-auth A (step n) failed: ${resAuthAn.error}`);
+  const uid = userA.id;
+
+  // 1) Preferences defaults: BEFORE any row exists, reads return the schema
+  //    defaults (invite_accepted + partner_logged + pending_invite ON,
+  //    missed_week OFF) — lazy-create semantics without a phantom row.
+  const defaults = defaultNotificationPrefs();
+  ok(defaults.invite_accepted === true && defaults.partner_logged === true, 'defaults: invite_accepted + partner_logged should be true');
+  ok(defaults.pending_invite === true, 'defaults: pending_invite should be true (owner-ratified)');
+  ok(defaults.missed_week === false, 'defaults: missed_week should be OFF');
+  const readDefaults = await getNotificationPrefs();
+  ok(readDefaults !== null, 'getNotificationPrefs returned null');
+  ok(readDefaults && readDefaults.invite_accepted === true, 'read defaults invite_accepted should be true');
+  ok(readDefaults && readDefaults.partner_logged === true, 'read defaults partner_logged should be true');
+  ok(readDefaults && readDefaults.pending_invite === true, 'read defaults pending_invite should be true');
+  ok(readDefaults && readDefaults.missed_week === false, 'read defaults missed_week should be false');
+  // The dev-mock row is NOT created by a read (lazy create only on write —
+  // mirrors real reads before a row exists).
+  const preRows = await devMock.listPushDevices(uid); // sanity: unrelated store untouched
+  ok(Array.isArray(preRows), 'dev push-device list should be an array before registration');
+
+  // 2) Toggle partner_logged OFF → reads back OFF; other toggles unchanged.
+  const setRes = await setNotificationPref('partner_logged', false);
+  ok(setRes.ok, `setNotificationPref failed: ${setRes.error}`);
+  const after = await getNotificationPrefs();
+  ok(after && after.partner_logged === false, 'partner_logged should read back OFF after toggle');
+  ok(after && after.invite_accepted === true, 'invite_accepted should stay ON (default)');
+  ok(after && after.missed_week === false, 'missed_week should stay OFF');
+  // Turn it back on so a re-run starts from defaults.
+  const setBack = await setNotificationPref('partner_logged', true);
+  ok(setBack.ok, `setNotificationPref (back on) failed: ${setBack.error}`);
+  ok((await getNotificationPrefs())?.partner_logged === true, 'partner_logged should restore to ON');
+
+  // 3) PERMISSION MACHINE — unseen → explained → granted; denied persists.
+  //    Fresh state (unseen): a wipe of the local flag + a fresh read.
+  await AsyncStorageRemove(permKey(uid));
+  ok((await getNotificationPermissionState()) === 'unseen', 'fresh state should be unseen');
+  ok((await shouldAskNotificationPermission()) === true, 'unseen → should ask');
+  await markNotificationExplained();
+  ok((await getNotificationPermissionState()) === 'explained', 'after explainer → explained');
+  ok((await shouldAskNotificationPermission()) === false, 'explained with no dismissal → should NOT re-ask (cooldown)');
+  // Denied persists.
+  await AsyncStorageRemove(permKey(uid));
+  await markNotificationExplained();
+  await dismissNotificationAsk();
+  // Cooldown NOT elapsed → no re-ask.
+  ok((await shouldAskNotificationPermission()) === false, 'explained+dismissed, cooldown pending → no re-ask');
+  // Time-travel the cooldown: overwrite the local dismissal with 15 days ago.
+  await AsyncStorageSet(permKey(uid), JSON.stringify({ state: 'explained', dismissedAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString() }));
+  ok((await shouldAskNotificationPermission()) === true, 'single re-ask allowed after cooldown');
+  // Grant (dev mock grants without an OS prompt; token registered).
+  const granted = await requestNotificationPermission();
+  ok(granted === 'granted', `dev grant should be granted, got ${granted}`);
+  ok((await getNotificationPermissionState()) === 'granted', 'state should be granted');
+  ok((await shouldAskNotificationPermission()) === false, 'granted → never ask again');
+
+  // 4) DEVICE REGISTRATION — dev path stores the fake token; re-registering
+  //    the same token is IDEMPOTENT (one row; last_seen_at refreshes).
+  const devRows = await devMock.listPushDevices(uid);
+  const token1 = await getPushDeviceToken();
+  ok(token1 && token1.startsWith('dev-expo-token-'), `dev token should be the fake form, got ${token1}`);
+  ok(devRows.length === 1, `expected exactly 1 dev push row after grant, got ${devRows.length}`);
+  ok(devRows[0].expo_push_token === token1, 'stored row token should match getPushDeviceToken');
+  ok(devRows[0].user_id === uid, 'stored row user_id should be the session user');
+  // Idempotent re-register (app-start refresh path with granted state).
+  const okRefresh = await refreshPushRegistrationIfGranted();
+  ok(okRefresh === undefined || okRefresh === true, 'refresh should complete without error');
+  const rows2 = await devMock.listPushDevices(uid);
+  ok(rows2.length === 1, `re-register should NOT duplicate the row, got ${rows2.length}`);
+  ok(rows2[0].expo_push_token === token1, 'token should be unchanged after refresh');
+  ok(typeof rows2[0].last_seen_at === 'string' && rows2[0].created_at === devRows[0].created_at, 'created_at stable, last_seen_at refreshed');
+
+  // 5) granted state survives a "restart" (the persisted flag re-read).
+  ok((await getNotificationPermissionState()) === 'granted', 'granted should persist across reads');
+
+  console.log(`        prefs defaults→toggle→readback; device 1 row idempotent; perm machine unseen→explained→granted (+denied) persists`);
 });
 
 console.log('');

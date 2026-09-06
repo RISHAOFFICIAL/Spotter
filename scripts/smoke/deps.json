@@ -5,5 +5,7 @@
   "expo-file-system": "smoke/expo-file-system.js",
   "react-native": "smoke/react-native.js",
   "@supabase/supabase-js": "smoke/supabase-js.js",
-  "expo-constants": "smoke/expo-constants.js"
+  "expo-constants": "smoke/expo-constants.js",
+  "expo-notifications": "smoke/expo-notifications.js",
+  "expo-device": "smoke/expo-device.js"
 }
