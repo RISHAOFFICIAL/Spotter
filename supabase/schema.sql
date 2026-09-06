@@ -531,4 +531,194 @@ $$;
 
 revoke all on function public.delete_account() from public;
 grant execute on function public.delete_account() to authenticated;
+-- ----------------------------------------------------------------------------- ---------------------------------------------------------------------------
+-- V1.1 BUILD #1: measurement foundation (first-party analytics + week snapshots
+-- + push scaffolding). Additive-only: new tables + policies below; nothing above
+-- is modified. Existing/live projects MUST apply this whole block (it is
+-- idempotent: create-if-not-exists + IF NOT EXISTS policies/indexes).
+--
+-- Design: first-party only, no third-party SDK. The client writes
+-- analytics_events rows directly (authenticated INSERT, own-or-anonymous rows
+-- only); reads are service-role only (dashboards) — there is intentionally NO
+-- client-side SELECT policy on analytics_events. weekly_results rows are
+-- written by the client when a week rolls over (finalize-on-fetch in
+-- src/lib/weeklyResults.ts) and are readable by the author + their accepted
+-- pair partner (recap needs partner results in Build #4). Notification tables
+-- are schema-now/client-later: Build #3 (push) adds the client use; the RLS
+-- below is strict own-row from day one.
+-- ---------------------------------------------------------------------------
+
+-- analytics_events: one row per tracked client event (8 families in v1.1:
+-- app_opened, signup_completed, pair_action, workout_logged wired in Build #1;
+-- nudge/recap/notification families arrive with their builds).
+-- user_id is NULL for pre-signup events (first app_open, pre-signup invite
+-- generation) so there is deliberately NO foreign key to public.users (the row
+-- may not exist yet) — the INSERT policy below is the integrity boundary.
+-- properties NEVER carries photo paths, names, emails, nudge text, or
+-- notification body text (enforced client-side in src/lib/analytics.ts).
+create table if not exists public.analytics_events (
+  id uuid primary key default gen_random_uuid(),
+  event_name text not null,
+  action text,
+  anonymous_install_id text,
+  session_id text,
+  user_id uuid,
+  group_id uuid,
+  source_id text,
+  occurred_at timestamptz not null default now(),
+  app_version text,
+  properties jsonb not null default '{}'::jsonb
+);
+
+alter table public.analytics_events enable row level security;
+
+create index if not exists analytics_events_name_idx
+  on public.analytics_events (event_name);
+create index if not exists analytics_events_occurred_idx
+  on public.analytics_events (occurred_at desc);
+create index if not exists analytics_events_user_idx
+  on public.analytics_events (user_id);
+
+-- Authenticated INSERT only; a user may write their own rows OR anonymous
+-- (pre-signup) rows. NO SELECT policy: client reads are forbidden entirely —
+-- funnels are computed service-side (service role bypasses RLS). We chose no
+-- own-row read (the brief's alternative) because event debugging happens in
+-- the dev-mock buffer + dashboards, and a read grant would widen the surface
+-- for no launch need.
+create policy "analytics_events_insert_own" on public.analytics_events
+  for insert to authenticated
+  with check (user_id is null or auth.uid() = user_id);
+
+-- weekly_results: one finalized snapshot row per (user, group, week). Written
+-- once when the week fully elapses (finalize-on-fetch); UNIQUE guards races.
+-- weekly_goal_snapshot is the goal AT FINALIZE TIME (documented v1.1
+-- simplification — see weeklyResults.ts; true historical accuracy is future
+-- work). nudge_present defaults false; Build #2 (nudge) sets it.
+create table if not exists public.weekly_results (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null,
+  group_id uuid not null,
+  week_start_at timestamptz not null,
+  week_end_at timestamptz not null,
+  weekly_goal_snapshot integer not null check (weekly_goal_snapshot between 1 and 7),
+  workout_count integer not null default 0 check (workout_count >= 0),
+  completed boolean not null default false,
+  nudge_present boolean default false,
+  finalized_at timestamptz not null default now(),
+  unique (user_id, group_id, week_start_at)
+);
+
+alter table public.weekly_results enable row level security;
+
+create index if not exists weekly_results_user_week_idx
+  on public.weekly_results (user_id, week_start_at desc);
+create index if not exists weekly_results_group_week_idx
+  on public.weekly_results (group_id, week_start_at desc);
+
+create policy "weekly_results_select_own" on public.weekly_results
+  for select using (auth.uid() = user_id);
+create policy "weekly_results_insert_own" on public.weekly_results
+  for insert with check (auth.uid() = user_id);
+create policy "weekly_results_update_own" on public.weekly_results
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "weekly_results_delete_own" on public.weekly_results
+  for delete using (auth.uid() = user_id);
+
+-- Pair-scoped READ: a user may SELECT result rows authored by their single
+-- accepted pair partner, scoped to the SHARED pair group (the recap in
+-- Build #4 reads "You: x of g / Partner: y of g" from these rows). Mirrors
+-- workouts_select_pair (same 2-member-group shape); insert/update/delete stay
+-- strictly own-row.
+create policy "weekly_results_select_pair" on public.weekly_results
+  for select using (
+    auth.uid() <> user_id
+    and exists (
+      select 1
+      from public.memberships mine
+      join public.memberships theirs on theirs.group_id = mine.group_id
+      where mine.user_id = auth.uid()
+        and theirs.user_id = weekly_results.user_id
+        and theirs.group_id = weekly_results.group_id
+        and (select count(*) from public.memberships m where m.group_id = mine.group_id) = 2
+    )
+  );
+
+-- notification_preferences: per-user push preference switches (Build #3 reads
+-- these before sending anything). Schema now, client use later. missed_week
+-- alerts default OFF until recap behavior is verified (plan rev 4).
+create table if not exists public.notification_preferences (
+  user_id uuid primary key references public.users (id) on delete cascade,
+  master_enabled boolean not null default true,
+  invite_accepted_enabled boolean not null default true,
+  partner_logged_enabled boolean not null default true,
+  missed_week_enabled boolean not null default false,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.notification_preferences enable row level security;
+
+create policy "notification_preferences_select_own" on public.notification_preferences
+  for select using (auth.uid() = user_id);
+create policy "notification_preferences_insert_own" on public.notification_preferences
+  for insert with check (auth.uid() = user_id);
+create policy "notification_preferences_update_own" on public.notification_preferences
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "notification_preferences_delete_own" on public.notification_preferences
+  for delete using (auth.uid() = user_id);
+
+-- push_devices: one row per (user, Expo push token). The token itself is
+-- opaque (no PII) but stays own-row isolated like everything else.
+create table if not exists public.push_devices (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users (id) on delete cascade,
+  expo_push_token text not null unique,
+  platform text,
+  app_version text,
+  last_seen_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+
+alter table public.push_devices enable row level security;
+
+create index if not exists push_devices_user_idx
+  on public.push_devices (user_id);
+
+create policy "push_devices_select_own" on public.push_devices
+  for select using (auth.uid() = user_id);
+create policy "push_devices_insert_own" on public.push_devices
+  for insert with check (auth.uid() = user_id);
+create policy "push_devices_update_own" on public.push_devices
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "push_devices_delete_own" on public.push_devices
+  for delete using (auth.uid() = user_id);
+
+-- push_deliveries: server-side send log (Build #3). dedupe_key UNIQUE is the
+-- anti-double-send guard (one delivery per triggering event); suppressed_reason
+-- records quiet-hours / preference / rate-limit suppressions for funnels.
+-- Written service-side; the client holds strict own-row policies only.
+create table if not exists public.push_deliveries (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null,
+  dedupe_key text not null unique,
+  kind text not null,
+  status text not null default 'queued' check (status in ('queued','sent','suppressed','failed')),
+  suppressed_reason text,
+  error text,
+  created_at timestamptz not null default now(),
+  sent_at timestamptz
+);
+
+alter table public.push_deliveries enable row level security;
+
+create index if not exists push_deliveries_user_idx
+  on public.push_deliveries (user_id);
+
+create policy "push_deliveries_select_own" on public.push_deliveries
+  for select using (auth.uid() = user_id);
+create policy "push_deliveries_insert_own" on public.push_deliveries
+  for insert with check (auth.uid() = user_id);
+create policy "push_deliveries_update_own" on public.push_deliveries
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "push_deliveries_delete_own" on public.push_deliveries
+  for delete using (auth.uid() = user_id);
 -- ---------------------------------------------------------------------------
