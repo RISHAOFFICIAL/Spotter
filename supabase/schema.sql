@@ -722,3 +722,30 @@ create policy "push_deliveries_update_own" on public.push_deliveries
 create policy "push_deliveries_delete_own" on public.push_deliveries
   for delete using (auth.uid() = user_id);
 -- ---------------------------------------------------------------------------
+-- V1.1 BUILD #2 (S slice): miss promise — a member's own optional note.
+-- Additive-only: one nullable column + one CHECK on the existing memberships
+-- table; NOTHING above is modified and no policies change (the existing
+-- own-row policies already cover it — see below).
+--
+-- Design: "If I miss, I owe you: ___" is a PERSONAL fill-in-the-blank note the
+-- member sets for themselves (≤80 chars, trimmed). It is an accountability
+-- note to the PAIR — surfaced only when THAT member missed a week, and never
+-- read cross-user by this build — NOT a wager or enforcement system and never
+-- described as one. Empty string means cleared; null = never set.
+--
+-- Storage: the column lives on the member's OWN membership row in the pair
+-- group (each member of the pair has their own promise). Writes need no new
+-- policy: memberships_update_own already requires auth.uid() = user_id, and
+-- reads are covered by memberships_select_own — a user can only ever read and
+-- write their OWN promise. On unpair, public.unpair() drops the pair
+-- membership rows, taking each member's miss_promise with them.
+--
+-- CHECK: null allowed (unset), empty allowed (cleared), length ≤ 80 enforced
+-- (char_length('') = 0 satisfies the lower bound; maxLength+validation also
+-- enforced client-side in src/lib/missPromise.ts).
+-- Existing/live projects MUST apply this ALTER before running a build that
+-- reads memberships.miss_promise (client code in src/lib/missPromise.ts +
+-- workoutStore.ts).
+alter table public.memberships add column if not exists miss_promise text
+  check (miss_promise is null or char_length(miss_promise) <= 80);
+-- ---------------------------------------------------------------------------

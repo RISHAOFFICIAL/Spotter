@@ -77,6 +77,14 @@ export interface Database {
           user_id: string;
           weekly_goal: number;
           role: 'member' | 'admin';
+          /**
+           * V1.1 Build #2 (S slice): the member's OWN optional miss promise
+           * ("If I miss, I owe you: ___", ≤80 chars, personal accountability
+           * note — NOT a wager/enforcement system). Null = never set; empty
+           * string = cleared. Own-row RLS only: never readable/writable by the
+           * partner in this build.
+           */
+          miss_promise: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -86,6 +94,7 @@ export interface Database {
           user_id: string;
           weekly_goal: number;
           role?: 'member' | 'admin';
+          miss_promise?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -95,6 +104,7 @@ export interface Database {
           user_id?: string;
           weekly_goal?: number;
           role?: 'member' | 'admin';
+          miss_promise?: string | null;
           created_at?: string;
           updated_at?: string;
         };
