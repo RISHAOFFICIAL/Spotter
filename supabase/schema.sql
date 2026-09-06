@@ -392,6 +392,13 @@ grant execute on function public.accept_invite(text) to authenticated;
 -- both memberships of the pair group are gone, the pair-scoped READ policies
 -- (`workouts_select_pair`, `workouts_storage_read_pair`) no longer match, so
 -- the ex-partner's photos and storage objects are sealed again immediately.
+--
+-- D2 (hygiene): after deleting both pair memberships we also clear the pair
+-- group's optional team_name and delete the now-empty pair group row itself
+-- (previously orphaned). User-visible behavior is unchanged — reads are
+-- membership-driven, and workouts.group_id is `on delete set null`, so workout
+-- rows survive with group_id null.
+--
 -- SECURITY DEFINER (so a member can delete the OTHER seat's membership row,
 -- which `memberships_delete_own` alone would forbid) + no argument (a user can
 -- only ever unpair THEMSELVES). Idempotent: already-solo → no-op, still ok.
@@ -400,7 +407,7 @@ returns jsonb
 language plpgsql
 security definer
 set search_path = public
-as $$
+as $function$
 declare
   my_id uuid := auth.uid();
   pair_group_id uuid;
@@ -419,11 +426,16 @@ begin
 
   if pair_group_id is not null then
     delete from public.memberships where group_id = pair_group_id;
+    -- D2: clear the pair's shared team name and remove the now-empty pair
+    -- group row (no memberships remain; workouts.group_id is set-null on
+    -- group delete so workout rows are preserved).
+    update public.groups set team_name = null where id = pair_group_id;
+    delete from public.groups where id = pair_group_id;
   end if;
 
   return jsonb_build_object('ok', true);
 end;
-$$;
+$function$;
 
 revoke all on function public.unpair() from public;
 grant execute on function public.unpair() to authenticated;
