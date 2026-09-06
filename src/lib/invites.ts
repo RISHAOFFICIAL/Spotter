@@ -19,8 +19,9 @@
 import * as Crypto from 'expo-crypto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { devMock, formatDevInviteCode, type DevInvite } from './mock';
+import { devMock, formatDevInviteCode, DEV_PAIR_GROUP_ID, type DevInvite } from './mock';
 import { getStoredSession, supabase } from './supabase';
+import { track } from './analytics';
 
 export const INVITE_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
@@ -125,9 +126,18 @@ export async function getOrCreateInviteCode(): Promise<InviteInfo> {
       }
     }
     await devMock.getOrSeedPartner();
+    // V1.1: first persisted generation = invite_created (stable token, so this
+    // fires once per install — subsequent calls reuse the token, no event).
+    if (!stored?.token) {
+      void track('pair_action', { action: 'invite_created' });
+    }
     return { displayCode: formatDevInviteCode(token), token, isDev: true };
   }
 
+  // V1.1: real-mode first generation = invite_created (same once-per-token rule).
+  if (!stored?.token) {
+    void track('pair_action', { action: 'invite_created' });
+  }
   // REAL mode: one invite row per user+token, idempotent, attached lazily to
   // the SAME stored token. RLS requires `inviter_id` = auth.uid(), so this
   // branch only runs once a session exists; the guest pre-signup path above
@@ -230,16 +240,25 @@ export async function acceptInvite(code: string): Promise<AcceptInviteResult> {
     if (inviter && inviter.id !== session.user.id) {
       // Real two-user accept: pair the current user with the inviter.
       await devMock.acceptDevPairWith(session.user.id, inviter);
+      void track('pair_action', { action: 'invite_accepted', groupId: DEV_PAIR_GROUP_ID });
       return { ok: true, inviterName: inviter.email.split('@')[0] ?? 'Partner' };
     }
     // Self-accept keeps the slice-C single-user demo story: pairs with the
     // preset demo partner so the shared feed renders without a real person.
     await devMock.acceptDevPair(session.user.id);
+    void track('pair_action', { action: 'invite_accepted', groupId: DEV_PAIR_GROUP_ID });
     return { ok: true, inviterName: 'Dev Partner' };
   }
 
   const { data, error } = await supabase.rpc('accept_invite', { p_token: normalized });
   if (error) return { ok: false, error: error.message };
+  void track('pair_action', {
+    action: 'invite_accepted',
+    groupId:
+      typeof (data as { group_id?: unknown } | null)?.group_id === 'string'
+        ? (data as { group_id: string }).group_id
+        : null,
+  });
   const parsed = (typeof data === 'string' ? (JSON.parse(data || '{}') as unknown) : data) as Record<
     string,
     string | boolean | number | null | undefined
@@ -273,11 +292,13 @@ export async function unpair(): Promise<UnpairResult> {
 
   if (session.isDevMode || !supabase) {
     await devMock.unpairDev(session.user.id);
+    void track('pair_action', { action: 'unpaired' });
     return { ok: true };
   }
 
   const { error } = await supabase.rpc('unpair');
   if (error) return { ok: false, error: error.message };
+  void track('pair_action', { action: 'unpaired' });
   return { ok: true };
 }
 

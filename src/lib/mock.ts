@@ -169,6 +169,23 @@ export const devMock = {
       await AsyncStorage.removeItem(`${STORE_PREFIX}teamName:${DEV_PAIR_GROUP_ID}`);
     }
   },
+  /** V1.1: dev-mock weekly result snapshots (mirror the weekly_results table). */
+  async listResults(userId: string): Promise<WeeklyResultRow[]> {
+    return (await readValue<WeeklyResultRow[]>(`results:${userId}`)) ?? [];
+  },
+  async saveResult(userId: string, row: WeeklyResultRow): Promise<void> {
+    const rows = (await readValue<WeeklyResultRow[]>(`results:${userId}`)) ?? [];
+    const idx = rows.findIndex(
+      (r) => r.group_id === row.group_id && r.week_start_at === row.week_start_at,
+    );
+    if (idx >= 0) rows[idx] = row;
+    else rows.push(row);
+    await writeValue(`results:${userId}`, rows);
+  },
+  /** V1.1: drop one user's result snapshots (smoke reset between finalize assertions). */
+  async clearResults(userId: string): Promise<void> {
+    await AsyncStorage.removeItem(`${STORE_PREFIX}results:${userId}`);
+  },
   /** Wipe ALL dev-mock state (smoke test / demo reset). Not used by the UI. */
   async clearAll(): Promise<void> {
     const keys = await AsyncStorage.getAllKeys();
@@ -202,6 +219,7 @@ export const devMock = {
           key === `${STORE_PREFIX}pair:${userId}` ||
           key === `${STORE_PREFIX}memberships:${userId}` ||
           key === `${STORE_PREFIX}invites:${userId}` ||
+          key === `${STORE_PREFIX}results:${userId}` ||
           (emailKey !== null && key === emailKey) ||
           (legacy?.id === userId && key === `${STORE_PREFIX}user`);
         if (ownedKey) {
@@ -426,6 +444,18 @@ export interface DevMembership {
   role: 'member' | 'admin';
   created_at: string;
   updated_at: string;
+}
+
+/** V1.1: dev-mock weekly result snapshot (mirrors weekly_results). */
+export interface WeeklyResultRow {
+  user_id: string;
+  group_id: string;
+  week_start_at: string;
+  week_end_at: string;
+  weekly_goal_snapshot: number;
+  workout_count: number;
+  completed: boolean;
+  nudge_present: boolean;
 }
 
 export const DEV_PARTNER_EMAIL = 'dev_partner@spotter.test';

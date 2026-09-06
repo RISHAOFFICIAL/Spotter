@@ -15,6 +15,7 @@ import { View } from 'react-native';
 import { isDevMode } from '@/lib/supabase';
 import { getStoredSession, clearSession, type AppSession } from '@/lib/supabase';
 import { devMock, type Profile } from '@/lib/mock';
+import { consumeIsFirstOpen, track } from '@/lib/analytics';
 import { colors } from '@/theme/tokens';
 
 interface AuthContextValue {
@@ -32,6 +33,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<AppSession | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  // V1.1: app_opened fires once per mount (is_first_open exactly once per
+  // install via the storage flag). Fire-and-forget — never blocks the gate.
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const isFirst = await consumeIsFirstOpen();
+      if (mounted) void track('app_opened', { props: { is_first_open: isFirst } });
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const refresh = async () => {
     const s = await getStoredSession();
