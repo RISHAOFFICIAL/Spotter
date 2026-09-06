@@ -1,5 +1,5 @@
 /**
- * Miss promise — optional personal accountability note (v1.1 Build #2, S slice).
+ * Miss promise — optional personal accountability note (v1.1 Build #2).
  *
  * "If I miss, I owe you: ___" is a fill-in-the-blank note each member sets for
  * THEMSELVES, ≤80 chars, private to the pair. It is surfaced ONLY if that
@@ -7,20 +7,23 @@
  * system, and is never described as one (no betting/stake/debt language).
  *
  * Storage mirrors naming.ts:
- *  - REAL mode: the caller's OWN membership row in the pair group
- *    (`memberships.miss_promise`, nullable; RLS keeps it own-row — the
- *    existing memberships_update_own / memberships_select_own policies already
- *    scope it, so the partner can never read or write your promise in this
- *    build). The user may belong to BOTH their solo "Personal" group and the
- *    pair group (2 members) — the pair group is the one the promise lives on.
+ *  - REAL mode: the member's membership row in the pair group
+ *    (`memberships.miss_promise`, nullable). OWN row: own-row RLS. PARTNER's
+ *    row: the pair-scoped `memberships_select_pair` policy (schema.sql —
+ *    mirrors workouts_select_pair; read-only, same 2-member shape), which is
+ *    what powers the partner MissCard (M slice). Writes stay strictly own-row:
+ *    memberships_update_own requires auth.uid() = user_id, so nobody can ever
+ *    write their partner's promise.
  *  - DEV MOCK: a per-user AsyncStorage key through devMock, mirroring the same
- *    own-row isolation; cleared on unpairDev exactly like real unpair drops
- *    the pair membership rows.
+ *    shape; the partner's key is readable through getPartnerMissPromise (dev
+ *    parity for the pair-scoped read). Cleared on unpairDev exactly like real
+ *    unpair drops the pair membership rows.
  *
- * Reads needed for the own-miss line surface the promise inside
- * `fetchWeeklyContext` (workoutStore.ts → WeeklyContext.missLine); this file
- * owns persistence + the real-mode pair-group resolution for writes.
+ * Reads needed for the own-miss line + partner MissCard surface inside
+ * `fetchWeeklyContext` (workoutStore.ts → WeeklyContext.missLine /
+ * partnerMissCard); this file owns persistence + promise accessors.
  */
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { devMock } from './mock';
 import { getStoredSession, supabase } from './supabase';
 
@@ -28,11 +31,56 @@ import { getStoredSession, supabase } from './supabase';
 export const MISS_PROMISE_MAX = 80;
 
 /**
+ * Pairing-time sheet once-flag (M slice). The setup prompt ("If you miss a
+ * week…") is offered once per user — right after pairing completes — and Save
+ * OR Skip both count as "seen", so it never re-asks. Stored per user in
+ * AsyncStorage (NOT the memberships table): it is a LOCAL prompted-once flag,
+ * identical in dev and real mode (no network, no RLS involvement).
+ *
+ * Exported from the lib (not only the sheet) so the smoke harness can prove
+ * the skip-flow: flag unset → prompt allowed; flagged → re-show suppressed;
+ * cleared → re-armed (dev parity for re-runs).
+ */
+const PROMPTED_PREFIX = 'spotter.missprompt:v1:';
+
+/** True when this user has already seen the pairing-time sheet (either path). */
+export async function hasSeenMissPrompt(): Promise<boolean> {
+  const session = await getStoredSession().catch(() => null);
+  if (!session) return true; // No session → don't prompt; a signed-in check owns this.
+  try {
+    return (await AsyncStorage.getItem(`${PROMPTED_PREFIX}${session.user.id}`)) === '1';
+  } catch {
+    return true; // Storage failure → fail silent, never nag.
+  }
+}
+
+/** Mark the sheet as shown for the current user (Save OR Skip both count). */
+export async function markMissPromptSeen(): Promise<void> {
+  try {
+    const session = await getStoredSession().catch(() => null);
+    if (session) await AsyncStorage.setItem(`${PROMPTED_PREFIX}${session.user.id}`, '1');
+  } catch {
+    // Best-effort local flag; the sheet is optional either way.
+  }
+}
+
+/** Test hook: clear the once-flag for the current user (smoke skip-flow). */
+export async function clearMissPromptSeen(): Promise<void> {
+  try {
+    const session = await getStoredSession().catch(() => null);
+    if (session) await AsyncStorage.removeItem(`${PROMPTED_PREFIX}${session.user.id}`);
+  } catch {
+    // Best-effort.
+  }
+}
+
+/**
  * Real mode: find the CURRENT user's pair group id — the 2-member group (their
  * solo "Personal" group has 1 member). Same detection used by fetchWeeklyContext
- * and naming.ts, so reads and writes always target the same group.
+ * and naming.ts, so reads and writes always target the same group. Exported
+ * for the MissCard read path (the partner row lives in the same pair group).
  */
-async function findPairGroupId(): Promise<string | null> {
+export async function findPairGroupId(): Promise<string | null> {
   const session = await getStoredSession();
   if (!session || !supabase) return null;
 
@@ -62,9 +110,7 @@ async function findPairGroupId(): Promise<string | null> {
 /**
  * Read the CURRENT user's own miss promise (''/null when unset or cleared).
  * Session-scoped like the other lib accessors (naming.ts): REAL mode reads the
- * caller's OWN membership row (own-row RLS); DEV reads the per-user key. The
- * partner's promise is never read in this build (Build #2 S slice — partner
- * MissCard comes later).
+ * caller's OWN membership row (own-row RLS); DEV reads the per-user key.
  */
 export async function getMissPromise(): Promise<string | null> {
   const session = await getStoredSession();
@@ -132,5 +178,44 @@ export async function setMissPromise(text: string): Promise<{ ok: boolean; error
     return { ok: true };
   } catch {
     return { ok: false, error: "Can't reach server. Try again." };
+  }
+}
+
+/**
+ * Read the PARTNER's miss promise (null when unset, cleared, or unpaired).
+ * V1.1 Build #2 (M slice) — the MissCard read path: the promise is the
+ * partner's OWN note, surfaced to the caller ONLY when the partner missed a
+ * week (the caller in workoutStore checks that condition separately).
+ *
+ * REAL: reads the partner's membership row in the shared pair group via the
+ * pair-scoped `memberships_select_pair` RLS policy (read-only mirror of
+ * workouts_select_pair — same 2-member shape). The row belongs to the pair
+ * group, never the solo "Personal" group. Writes stay strictly own-row, so
+ * this accessor can never modify the partner's promise.
+ * DEV: reads the partner's per-user devMock key (parity for the pair read;
+ * the dev pair group is shared between both sides by construction).
+ */
+export async function getPartnerMissPromise(partnerId: string, pairGroupId: string | null): Promise<string | null> {
+  const session = await getStoredSession();
+  if (!session || !partnerId) return null;
+
+  if (session.isDevMode || !supabase) {
+    // DEV MOCK — the partner's own key (mirrors the pair-scoped membership
+    // read; the dev pair is one shared group, so no group scoping is needed).
+    return devMock.getMissPromise(partnerId);
+  }
+
+  if (!pairGroupId) return null;
+  try {
+    const { data } = await supabase
+      .from('memberships')
+      .select('miss_promise')
+      .eq('user_id', partnerId)
+      .eq('group_id', pairGroupId)
+      .maybeSingle();
+    const trimmed = data?.miss_promise?.trim() ?? '';
+    return trimmed || null;
+  } catch {
+    return null;
   }
 }

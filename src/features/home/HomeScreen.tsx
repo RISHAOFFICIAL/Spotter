@@ -24,6 +24,8 @@ import { WeeklyRing } from '@/features/home/WeeklyRing';
 import { FeedCard } from '@/features/home/FeedCard';
 import { EmptyState, InviteBanner, type EmptyCase } from '@/features/home/EmptyState';
 import { InviteSheet } from '@/features/invites/InviteSheet';
+import { MissSetupSheet } from '@/features/invites/MissSetupSheet';
+import { hasSeenMissPrompt } from '@/lib/missPromise';
 import { colors, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
 import { fetchWeeklyContext } from '@/lib/workoutStore';
@@ -45,6 +47,16 @@ export default function HomeScreen() {
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [welcomeToast, setWelcomeToast] = useState<string | null>(null);
   const mounted = useRef(true);
+  // V1.1 Build #2 (M slice): pairing-time setup sheet. Shows ONCE per user,
+  // right after pairing completes for the CURRENT user — both paths: the
+  // invitee who just accepted (lands here with hasPartner flipping true) and
+  // the inviter whose invite just got accepted (their Home flips hasPartner on
+  // the next fetch). Detection reuses the existing pairing-success states:
+  // the welcome toast (acceptee path) and the invite-banner unmount
+  // (hasPartner flip covers the inviter path). The persisted once-flag keeps
+  // it to a single showing; Skip never re-asks.
+  const [missSheetOpen, setMissSheetOpen] = useState(false);
+  const wasPaired = useRef(false);
 
   // In-app welcome toast after a fresh accept (invite-flow.md §5: one-time,
   // above the bottom bar — push notifications are out of MVP scope).
@@ -71,6 +83,23 @@ export default function HomeScreen() {
     }
     setCtx(res.context);
     setError(null);
+    // Pairing-time setup sheet (M slice): when the context flips from solo to
+    // paired for the first time this session AND the user never saw the sheet,
+    // offer the optional miss note once. Covers both pairing paths — the
+    // acceptee (arrives with the welcome toast) and the inviter (sees the flip
+    // on their next fetch after the partner accepts). Background refreshes
+    // (post-log reload) also flow through here, which is exactly the inviter
+    // path: their first paired fetch after acceptance triggers the sheet.
+    if (res.context.hasPartner && !wasPaired.current) {
+      wasPaired.current = true;
+      void hasSeenMissPrompt().then((seen) => {
+        if (!seen && mounted.current) setMissSheetOpen(true);
+      });
+    } else if (res.context.hasPartner) {
+      wasPaired.current = true;
+    } else {
+      wasPaired.current = false;
+    }
   }, []);
 
   useEffect(() => {
@@ -115,8 +144,12 @@ export default function HomeScreen() {
 
   // V1.1 Build #2 (S slice): own-miss line — a muted whisper under the ring,
   // shown ONLY when THIS user missed the PREVIOUS week AND set a miss promise.
-  // The partner's promise is never surfaced here (that's a later slice).
   const ownMissLine = ctx?.missLine?.kind === 'ownMiss' ? ctx.missLine.promise : null;
+
+  // V1.1 Build #2 (M slice): partner MissCard — one muted card at the top of
+  // the feed, shown ONLY when the partner missed THEIR previous week AND set
+  // a miss promise. Neutral, never shaming; no streak/guilt language.
+  const partnerMissCard = ctx?.partnerMissCard?.kind === 'partnerMiss' ? ctx.partnerMissCard.promise : null;
 
   // Status line under the ring (home-screen.md §2; rings are PERSONAL).
   // Compliance brief #2 (spec §3): the paired branches use "your ring" wording;
@@ -249,6 +282,19 @@ export default function HomeScreen() {
               ) : null}
             </View>
             <View style={styles.feed}>
+              {/* Partner MissCard (M slice): passive, muted, top of feed. Both
+                  conditions (partner missed + promise exists) are already
+                  checked in the context — render nothing when null. */}
+              {partnerMissCard && partnerFirstName && (
+                <View style={styles.missCard} accessibilityRole="text" accessibilityLabel={`${partnerFirstName} missed last week note`}>
+                  <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+                    {partnerFirstName} missed last week. Their note:
+                  </Text>
+                  <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex }]}>
+                    “{partnerMissCard}”
+                  </Text>
+                </View>
+              )}
               {ctx.logs.map((log) => (
                 <FeedCard key={log.id} log={log} now={now} />
               ))}
@@ -271,6 +317,16 @@ export default function HomeScreen() {
 
       <LogSheet visible={logOpen} onClose={() => setLogOpen(false)} onLogged={handleLogged} partnerName={partnerDisplayName ?? partnerFirstName} />
       <InviteSheet visible={inviteOpen} onClose={() => setInviteOpen(false)} />
+      <MissSetupSheet
+        visible={missSheetOpen}
+        partnerFirstName={partnerFirstName ?? null}
+        onDone={() => {
+          setMissSheetOpen(false);
+          // A saved note changes the own-miss surface — refresh quietly so a
+          // later miss renders it without a manual pull.
+          void load(true);
+        }}
+      />
 
       {/* In-app welcome toast after accepting (one-time; push is out of MVP scope). */}
       {welcomeToast && (
@@ -308,6 +364,14 @@ const styles = StyleSheet.create({
   ringBlock: { alignItems: 'center', marginTop: spacing.sm, marginBottom: spacing.sm },
   ringLoading: { height: 132, justifyContent: 'center' },
   missLine: { marginTop: spacing.sm, gap: spacing.xs, paddingHorizontal: spacing.lg },
+  missCard: {
+    gap: spacing.xs,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.background.raised.hex,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
   feedHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -68,10 +68,19 @@ export interface WeeklyContext {
    * ONLY when THIS user missed the PREVIOUS week AND set a miss promise:
    * `{ kind: 'ownMiss', promise }` → render `You said: "{promise}"` + one
    * gentle line. `null` when the previous week was NOT missed or no promise
-   * is set. Never carries the partner's promise (their surface is a later
-   * slice).
+   * is set.
    */
   missLine: { kind: 'ownMiss'; promise: string } | null;
+  /**
+   * V1.1 Build #2 (M slice) — partner MissCard state. A muted card at the top
+   * of the feed shown ONLY when the PARTNER missed THEIR previous
+   * fully-elapsed week AND their miss promise exists:
+   * `{ kind: 'partnerMiss', promise }` → render
+   * `{partnerFirstName} missed last week. Their note: "{promise}"` + nothing
+   * else. `null` when either condition is false (or unpaired). No push, no
+   * badge, no shaming copy — passive feed surface only.
+   */
+  partnerMissCard: { kind: 'partnerMiss'; promise: string } | null;
 }
 
 const DAY_INDEX: Record<string, number> = {
