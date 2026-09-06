@@ -4,4 +4,7 @@
  * real-mode branch of the app is not part of the dev-mock smoke flow). */
 module.exports = {
   Platform: { OS: 'web', select: (obj) => obj.web ?? obj.default },
+  AppState: {
+    addEventListener: () => ({ remove: () => {} }),
+  },
 };

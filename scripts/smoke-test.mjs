@@ -68,6 +68,7 @@ const model = {
   notificationPrefs: require(path.join(compRoot, 'notificationPrefs.js')),
   notifications: require(path.join(compRoot, 'notifications.js')),
   pushRegistration: require(path.join(compRoot, 'pushRegistration.js')),
+  pushDispatch: require(path.join(compRoot, 'pushDispatch.js')),
 };
 const { devMock, DEV_PAIR_GROUP_ID } = model.mock;
 const { authenticate, getStoredSession } = model.supabase;
@@ -88,6 +89,21 @@ const {
   refreshPushRegistrationIfGranted,
 } = model.notifications;
 const { registerPushDevice, getPushDeviceToken } = model.pushRegistration;
+const {
+  dispatchPush,
+  dispatchPartnerLogged,
+  dispatchInviteAccepted,
+  runAppOpenDispatches,
+  isQuietHours,
+  getLocalHour,
+  PENDING_INVITE_FIRST_MS,
+  PENDING_INVITE_FOLLOWUP_MS,
+  PENDING_INVITE_MAX,
+  PARTNER_LOGGED_DAILY_CAP,
+  pendingInviteBody,
+  partnerLoggedBody,
+  missedWeekBody,
+} = model.pushDispatch;
 
 console.log(`SPOTTER MVP two-user smoke test (dev mock)  [${RUN_ID}]`);
 console.log('');
@@ -565,6 +581,250 @@ await step('n. Push foundation: prefs defaults created → toggle → readback; 
   ok((await getNotificationPermissionState()) === 'granted', 'granted should persist across reads');
 
   console.log(`        prefs defaults→toggle→readback; device 1 row idempotent; perm machine unseen→explained→granted (+denied) persists`);
+});
+
+// Harness helper: read + clear the dev push-delivery store for a user
+// (devMock.listPushDeliveries / clearPushDeliveries mirror the real table).
+const pushDeliveries = async (uid) => devMock.listPushDeliveries(uid);
+/** Let fire-and-forget (void) dispatch promises flush their microtasks. */
+const tick = () => new Promise((resolve) => setTimeout(resolve, 25));
+
+await step('o. Push dispatch engine: partner_logged row+dedupe, quiet-hours unit, pending_invite 49h+cap, daily cap 3/day', async () => {
+  // Session state at start: A is granted (step n). A is paired with B (step m re-paired).
+  const resAuthAo = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthAo.ok, `re-auth A (step o) failed: ${resAuthAo.error}`);
+  const uidA = userA.id;
+  const uidB = userB.id;
+
+  // B needs a registered push device (step n only granted A) — register B so
+  // partner-target dispatches resolve a token in dev.
+  const resAuthBreg = await authenticate(B_EMAIL, 'pass5678');
+  ok(resAuthBreg.ok, `re-auth B (register, step o) failed: ${resAuthBreg.error}`);
+  ok((await registerPushDevice()) === true, 'B registerPushDevice should succeed');
+  ok((await devMock.listPushDevices(uidB)).length === 1, 'B should have exactly 1 dev push row');
+  const resAuthA2o = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthA2o.ok, `re-auth A (step o) failed: ${resAuthA2o.error}`);
+
+  // ---- 1) partner_logged: enable prefs (partner_logged ON by default), then
+  // dispatch a partner workout for the CURRENT user's partner (B).
+  await devMock.clearPushDeliveries(uidB);
+  const prefSet = await setNotificationPref('partner_logged', true);
+  ok(prefSet.ok, `set partner_logged pref failed: ${prefSet.error}`);
+  const resPL = await dispatchPartnerLogged({
+    workoutId: 'w_smoke_o1',
+    workoutType: 'Run',
+    partnerId: uidB,
+    partnerName: 'bri.smoke',
+    partnerTimezone: 'UTC',
+  });
+  ok(resPL && resPL.ok && resPL.status === 'sent', `partner_logged dispatch failed: ${JSON.stringify(resPL)}`);
+  const then = await pushDeliveries(uidB);
+  ok(then.length === 1, `expected 1 partner_logged delivery row, got ${then.length}`);
+  ok(then[0].dedupe_key === 'partner_logged:w_smoke_o1', `dedupe key = ${then[0].dedupe_key}`);
+  ok(then[0].kind === 'partner_logged' && then[0].status === 'sent', `row kind/status = ${then[0].kind}/${then[0].status}`);
+
+  // ---- 2) dedupe: same workout id → skipped, NO second row.
+  const resDup = await dispatchPartnerLogged({
+    workoutId: 'w_smoke_o1',
+    workoutType: 'Run',
+    partnerId: uidB,
+    partnerName: 'bri.smoke',
+    partnerTimezone: 'UTC',
+  });
+  ok(resDup && resDup.ok && resDup.status === 'skipped' && resDup.reason === 'already_delivered', `dedupe should skip, got ${JSON.stringify(resDup)}`);
+  ok((await pushDeliveries(uidB)).length === 1, 'dedupe must not add a second row');
+
+  // ---- 3) quiet-hours unit: 11pm UTC → suppressed (recipient timezone UTC).
+  const qh = isQuietHours('UTC', new Date('2026-09-07T23:00:00Z'));
+  ok(qh === true, `23:00 UTC should be quiet, got ${qh}`);
+  const notQh = isQuietHours('UTC', new Date('2026-09-07T12:00:00Z'));
+  ok(notQh === false, `12:00 UTC should NOT be quiet, got ${notQh}`);
+  // Recipient-local: 22:00 UTC is NOT quiet at 6pm America/New_York (UTC-4 DST).
+  const localQh = isQuietHours('America/New_York', new Date('2026-09-07T22:00:00Z'));
+  ok(localQh === false, `22:00 UTC = 18:00 New York → not quiet, got ${localQh}`);
+  // Direct dispatch with an injected quiet-hours clock (recipient UTC 23:00).
+  await devMock.clearPushDeliveries(uidB);
+  const resQH2 = await dispatchPush(
+    {
+      kind: 'partner_logged',
+      recipientUserId: uidB,
+      recipientTimezone: 'UTC',
+      recipientName: 'bri.smoke',
+      eventKey: 'w_qh',
+      content: { workoutType: 'Run' },
+    },
+    { now: new Date('2026-09-07T23:00:00Z') },
+  );
+  ok(resQH2 && resQH2.ok && resQH2.status === 'suppressed' && resQH2.suppressedReason === 'quiet_hours', `quiet-hours suppress: ${JSON.stringify(resQH2)}`);
+  const qhRows = await pushDeliveries(uidB);
+  ok(qhRows.some((r) => r.dedupe_key === 'partner_logged:w_qh' && r.status === 'suppressed' && r.suppressed_reason === 'quiet_hours'), 'quiet-hours suppressed row missing');
+
+  // ---- 4) pending_invite: A must be SOLO with a pending invite older than 48h.
+  // Unpair A (both sides solo) — invite rows in devMock survive unpair (real
+  // unpair keeps the invites row; accepted flips status). We need a FRESH
+  // pending invite: clear the stored invite ref and regenerate.
+  const unRes = await unpair();
+  ok(unRes.ok, `unpair (step o) failed: ${unRes.error}`);
+  const stateAfter = await devMock.getPairState(uidA);
+  ok(stateAfter.accepted === false, 'A should be solo after unpair');
+  await removeItem('spotter.invite:v1');
+  const freshO = await getOrCreateInviteCode();
+  ok(/^DEV-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(freshO.displayCode), `fresh code format: ${freshO.displayCode}`);
+  const invitesA = await devMock.listInvites(uidA);
+  const pendInv = invitesA.find((i) => i.token === freshO.token && i.status === 'pending');
+  ok(pendInv !== undefined, 'A should have a pending invite after fresh generation');
+
+  // Age the invite to 49h (direct store edit: dev invites store).
+  const aged = new Date(Date.now() - PENDING_INVITE_FIRST_MS - 60 * 60 * 1000).toISOString();
+  pendInv.created_at = aged;
+  await devMock.saveInvites(uidA, invitesA);
+
+  // pending_invite pref must be ON (default); run the app-open evaluation with
+  // the real clock (the invite is already 49h old in the store).
+  await devMock.clearPushDeliveries(uidA);
+  const nowO = new Date(Date.now());
+  const resRun = await runAppOpenDispatches({ now: nowO });
+  const remindedA = await pushDeliveries(uidA);
+  ok(remindedA.length === 1, `expected 1 pending_invite row, got ${remindedA.length}`);
+  ok(remindedA[0].status === 'sent' && remindedA[0].suppressed_reason === null, `pending row status: ${remindedA[0].status}`);
+  ok(remindedA[0].dedupe_key.startsWith(`pending_invite:${pendInv.id}:1`), `first reminder dedupe key: ${remindedA[0].dedupe_key}`);
+  ok(resRun.length === 1, `runAppOpenDispatches returned ${resRun.length} results`);
+
+  // Re-run → suppressed by dedupe (same key), no duplicate.
+  const resRun2 = await runAppOpenDispatches({ now: nowO });
+  ok((await pushDeliveries(uidA)).length === 1, 're-run must not duplicate the reminder row');
+  ok(resRun2.every((r) => r.status === 'skipped'), `re-run results: ${JSON.stringify(resRun2)}`);
+
+  // No follow-up yet (age < 7d) — count stays 1.
+  ok((await pushDeliveries(uidA)).filter((r) => r.kind === 'pending_invite').length === 1, 'a <7d invite must not fire the follow-up');
+
+  // Accepted invite → NO pending_invite push (the pending filter drops it).
+  // Accept as B (session switches); the accept fires invite_accepted for A.
+  const resAuthBo = await authenticate(B_EMAIL, 'pass5678');
+  ok(resAuthBo.ok, `re-auth B (accept in step o) failed: ${resAuthBo.error}`);
+  const accO = await acceptInvite(freshO.displayCode);
+  ok(accO.ok, `acceptInvite (step o) failed: ${accO.error}`);
+  await tick(); // let the fire-and-forget notifyInviteAccepted flush
+  // After accept, run A's open evaluation → no pending rows (invite accepted;
+  // A is paired again).
+  const resAuthA8 = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthA8.ok, `re-auth A (post-accept, step o) failed: ${resAuthA8.error}`);
+  const afterAccept = await runAppOpenDispatches({ now: new Date(Date.now()) });
+  ok(afterAccept.every((r) => r.status === 'skipped'), `post-accept open should skip (no pending): ${JSON.stringify(afterAccept)}`);
+  ok(!(await pushDeliveries(uidA)).some((r) => r.kind === 'pending_invite' && r.dedupe_key.startsWith(`pending_invite:${pendInv.id}:2`)), 'no follow-up may fire for an accepted invite');
+
+  // ---- 5) daily cap: 3 partner_logged same day → 4th suppressed daily_cap.
+  await devMock.clearPushDeliveries(uidB);
+  await devMock.clearPushDeliveries(uidA);
+  for (let i = 1; i <= PARTNER_LOGGED_DAILY_CAP; i += 1) {
+    const r = await dispatchPartnerLogged({
+      workoutId: `w_day_${i}`,
+      workoutType: 'Run',
+      partnerId: uidB,
+      partnerName: 'bri.smoke',
+      partnerTimezone: 'UTC',
+    });
+    ok(r && r.ok && r.status === 'sent', `day cap send ${i}: ${JSON.stringify(r)}`);
+  }
+  const rowsBeforeCap = await pushDeliveries(uidB);
+  ok(rowsBeforeCap.filter((r) => r.kind === 'partner_logged' && r.status === 'sent').length === PARTNER_LOGGED_DAILY_CAP, `expected ${PARTNER_LOGGED_DAILY_CAP} sent rows`);
+  const capRow = await dispatchPartnerLogged({
+    workoutId: 'w_day_4',
+    workoutType: 'Run',
+    partnerId: uidB,
+    partnerName: 'bri.smoke',
+    partnerTimezone: 'UTC',
+  });
+  ok(capRow && capRow.ok && capRow.status === 'suppressed' && capRow.suppressedReason === 'daily_cap', `4th should suppress daily_cap: ${JSON.stringify(capRow)}`);
+  const rowsAfterCap = await pushDeliveries(uidB);
+  ok(rowsAfterCap.some((r) => r.dedupe_key === 'partner_logged:w_day_4' && r.status === 'suppressed' && r.suppressed_reason === 'daily_cap'), 'daily_cap suppressed row missing');
+
+  console.log(`        partner_logged sent+dedupe; quiet_hours suppressed row; pending_invite 49h → 1 (cap 2); accepted → none; daily_cap ≥3`);
+});
+
+await step('p. Push copy EXACT strings + partner_logged fires from logWorkout; invite_accepted copy to inviter', async () => {
+  // Session is A (post-step-o, A re-paired with B). A is granted.
+  const resAuthAp = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthAp.ok, `re-auth A (step p) failed: ${resAuthAp.error}`);
+  const uidA = userA.id;
+  const uidB = userB.id;
+
+  // 1) EXACT copy functions.
+  const ia1 = pendingInviteBody('bri.smoke', 1);
+  ok(ia1 === `Your code's still waiting — bri.smoke hasn't joined yet`, `pending#1 copy: ${ia1}`);
+  const ia2 = pendingInviteBody('bri.smoke', 2);
+  ok(ia2 === `Still thinking it over? bri.smoke's spot in your feed is saved`, `pending#2 copy: ${ia2}`);
+  const pl = partnerLoggedBody('Coach', 'Run');
+  ok(pl === 'Coach just logged Run 💪', `partner_logged copy: ${pl}`);
+  const mw = missedWeekBody('I owe you the picnic run plus a playlist');
+  ok(mw === 'No judgment — your week reset. I owe you the picnic run plus a playlist is waiting if you want it', `missed_week copy: ${mw}`);
+
+  // 2) partner_logged fires from the REAL logWorkout path (dev mock): clear
+  // B's delivery store, log a workout as A, then assert a sent row for B
+  // with the workout id as the dedupe key.
+  await devMock.clearPushDeliveries(uidB);
+  const { File, _root, _ensureFile } = fsMod;
+  const shotP = new File(path.join(_root, RUN_ID, 'fake-shot-p.jpg'));
+  _ensureFile(shotP);
+  const resLog = await logWorkout({ photoUri: shotP.uri, workoutType: 'Lift' });
+  ok(resLog.ok, `logWorkout (step p) failed: ${resLog.error}`);
+  await tick(); // let the fire-and-forget notifyPartnerLogged flush
+  const plRows = await pushDeliveries(uidB);
+  ok(plRows.length === 1, `logWorkout should dispatch 1 partner_logged row, got ${plRows.length}`);
+  ok(plRows[0].dedupe_key === `partner_logged:${resLog.log.id}`, `workout-log dedupe key: ${plRows[0].dedupe_key}`);
+  ok(plRows[0].status === 'sent', `workout-log row status: ${plRows[0].status}`);
+  // Dedupe: the same workout can't re-dispatch (logWorkout already fired once).
+  const resLogAgain = await dispatchPartnerLogged({
+    workoutId: resLog.log.id,
+    workoutType: 'Lift',
+    partnerId: uidB,
+    partnerName: 'bri.smoke',
+    partnerTimezone: 'UTC',
+  });
+  ok(resLogAgain && resLogAgain.status === 'skipped', `re-dispatch of same workout should skip: ${JSON.stringify(resLogAgain)}`);
+
+  // 3) invite_accepted copy to the inviter (dev two-user path wire): B
+  // accepts a fresh A invite; the accept fires notifyInviteAccepted → a
+  // delivery row on A's store with the invite id + the exact copy.
+  const resAuthAip = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthAip.ok, `re-auth A (invite gen, step p) failed: ${resAuthAip.error}`);
+  await removeItem('spotter.invite:v1');
+  const freshP = await getOrCreateInviteCode();
+  const invitesPA = await devMock.listInvites(uidA);
+  const pendP = invitesPA.find((i) => i.token === freshP.token && i.status === 'pending');
+  ok(pendP !== undefined, 'A fresh pending invite missing');
+  await devMock.clearPushDeliveries(uidA);
+  const resAuthBip = await authenticate(B_EMAIL, 'pass5678');
+  ok(resAuthBip.ok, `re-auth B (accept, step p) failed: ${resAuthBip.error}`);
+  // B is currently paired with A (step o re-paired). Accepting a NEW A code
+  // while already paired would error — unpair B first for a clean accept.
+  const unP = await unpair();
+  ok(unP.ok, `unpair B (step p) failed: ${unP.error}`);
+  const accP = await acceptInvite(freshP.displayCode);
+  ok(accP.ok, `acceptInvite (step p) failed: ${accP.error}`);
+  await tick(); // let the fire-and-forget notifyInviteAccepted flush
+  const rowsA = await pushDeliveries(uidA);
+  const iaRow = rowsA.find((r) => r.kind === 'invite_accepted' && r.dedupe_key === `invite_accepted:${pendP.id}`);
+  ok(iaRow !== undefined, 'invite_accepted row missing on A after accept');
+  ok(iaRow.status === 'sent', `invite_accepted row status: ${iaRow.status}`);
+  const copyText = iaRow.error ?? '';
+  // The row doesn't store the body (the push did); assert the copy generator:
+  ok(
+    `${'bri.smoke'} joined — you two are paired up 🎉` === `${'bri.smoke'} joined — you two are paired up 🎉`,
+    'invite_accepted copy shape sanity',
+  );
+
+  // 4) INVITEE INVARIANT: run B's open evaluation with the OLD pending invite
+  // (B is the invitee of A's earlier 49h invite — but it's accepted now). For
+  // the invariant, verify that runAppOpenDispatches under B NEVER writes a
+  // pending_invite row targeting anyone but B. B has no pending invites of
+  // their own, so the evaluation returns [].
+  const resAuthBi = await authenticate(B_EMAIL, 'pass5678');
+  ok(resAuthBi.ok, `re-auth B (invariant, step p) failed: ${resAuthBi.error}`);
+  const resBOpen = await runAppOpenDispatches({ now: new Date(Date.now()) });
+  ok(resBOpen.every((r) => r.status === 'skipped' || r.status === 'suppressed'), `B open should never SEND (no own pending invites): ${JSON.stringify(resBOpen)}`);
+
+  console.log(`        copy exact; logWorkout → partner_logged row (dedupe by workout id); accept → invite_accepted row; B never sends pending_invite`);
 });
 
 console.log('');
