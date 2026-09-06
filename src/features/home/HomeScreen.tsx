@@ -96,7 +96,11 @@ export default function HomeScreen() {
 
   const weekCount = ctx?.logs.filter((l) => l.userId === session?.user.id).length ?? 0;
   const hasPartner = ctx?.hasPartner ?? false;
+  // Naming feature: this user's preferred partner name (local pet name, else
+  // the partner's real first name) + the optional shared team name.
   const partnerFirstName = ctx?.partner?.firstName;
+  const partnerDisplayName = ctx?.partnerDisplayName ?? partnerFirstName;
+  const teamName = ctx?.teamName ?? null;
   const emptyVariant: EmptyCase = hasPartner ? 'noLogsPartner' : 'noLogsNoPartner';
 
   // Status line under the ring (home-screen.md §2; rings are PERSONAL).
@@ -119,7 +123,7 @@ export default function HomeScreen() {
     }
     if (paired) {
       return {
-        text: ctx ? `${weekCount} of ${ctx.weeklyGoal} — your ring, ${partnerFirstName} fills theirs.` : '',
+        text: ctx ? `${weekCount} of ${ctx.weeklyGoal} — your ring, ${partnerDisplayName ?? partnerFirstName} fills theirs.` : '',
         color: colors.text.secondary.hex,
         strong: false,
       };
@@ -195,7 +199,7 @@ export default function HomeScreen() {
 
         {/* Feed */}
         {ctx && ctx.logs.length === 0 && (
-          <EmptyState variant={emptyVariant} partnerName={partnerFirstName} />
+          <EmptyState variant={emptyVariant} partnerName={partnerDisplayName ?? partnerFirstName} />
         )}
         {ctx && ctx.logs.length > 0 && (
           <>
@@ -203,7 +207,7 @@ export default function HomeScreen() {
               <Text style={[textStyles.label.style, styles.feedHeader]}>RECENT</Text>
               {hasPartner && partnerFirstName ? (
                 <Text style={[textStyles.label.style, { color: colors.text.muted.hex }]}>
-                  Paired with {partnerFirstName}
+                  {teamName ? teamName : `Paired with ${partnerDisplayName ?? partnerFirstName}`}
                 </Text>
               ) : null}
             </View>
@@ -212,7 +216,7 @@ export default function HomeScreen() {
                 <FeedCard key={log.id} log={log} now={now} />
               ))}
               {hasPartner && partnerFirstName && ctx.logs.every((l) => l.userId === session?.user.id) && (
-                <EmptyState variant="partnerNoLogs" partnerName={partnerFirstName} />
+                <EmptyState variant="partnerNoLogs" partnerName={partnerDisplayName ?? partnerFirstName} />
               )}
             </View>
           </>
@@ -228,7 +232,7 @@ export default function HomeScreen() {
       {/* Bottom bar — pinned; camera is the fixed primary action. Home is already the active screen, so the Home slot is a no-op. */}
       <BottomBar onHome={() => {}} onCamera={() => setLogOpen(true)} weekCount={weekCount} />
 
-      <LogSheet visible={logOpen} onClose={() => setLogOpen(false)} onLogged={handleLogged} partnerName={partnerFirstName} />
+      <LogSheet visible={logOpen} onClose={() => setLogOpen(false)} onLogged={handleLogged} partnerName={partnerDisplayName ?? partnerFirstName} />
       <InviteSheet visible={inviteOpen} onClose={() => setInviteOpen(false)} />
 
       {/* In-app welcome toast after accepting (one-time; push is out of MVP scope). */}

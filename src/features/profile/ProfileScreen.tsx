@@ -11,8 +11,8 @@
  * The success message ("Account deleted. Sorry to see you go.") shows only
  * after the deletion actually completed — no fake delete.
  */
-import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,6 +20,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/features/auth/AuthProvider';
 import { AppButton } from '@/components/AppButton';
 import { deleteAccount } from '@/lib/accountDeletion';
+import { getPetName, setPetName, setTeamName } from '@/lib/naming';
+import { fetchWeeklyContext } from '@/lib/workoutStore';
 import { colors, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
 
@@ -34,6 +36,40 @@ export function ProfileScreen() {
 
   const email = session?.user.email ?? profile?.email ?? '';
   const name = profile?.name ?? email.split('@')[0] ?? '';
+
+  // Naming feature (lead brief): optional local pet name (what I call MY
+  // partner, shown to me only) + optional shared pair team name. Both fall
+  // back to current behavior when empty.
+  const [partnerFirstName, setPartnerFirstName] = useState<string | null>(null);
+  const [petName, setPetNameValue] = useState('');
+  const [teamNameValue, setTeamNameValue] = useState('');
+  const [namingBusy, setNamingBusy] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const [ctx, pet] = await Promise.all([fetchWeeklyContext(), getPetName()]);
+      if (!mounted) return;
+      if (ctx.ok && ctx.context?.hasPartner) {
+        setPartnerFirstName(ctx.context.partner?.firstName ?? null);
+        setTeamNameValue(ctx.context.teamName ?? '');
+      }
+      setPetNameValue(pet ?? '');
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const saveNaming = async () => {
+    if (namingBusy) return;
+    setNamingBusy(true);
+    setMessage(null);
+    await setPetName(petName);
+    const teamRes = await setTeamName(teamNameValue);
+    setNamingBusy(false);
+    setMessage(teamRes.ok ? 'Saved.' : (teamRes.error ?? 'Saved.'));
+  };
 
   const runDelete = async () => {
     if (busy || done) return;
@@ -75,6 +111,54 @@ export function ProfileScreen() {
         <View style={styles.card}>
           <Text style={[textStyles.bodyStrong.style, { color: colors.text.primary.hex }]}>{name || 'You'}</Text>
           <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex }]}>{email}</Text>
+        </View>
+
+        {/* Naming (optional) — pet name is local-only; team name is shared.
+            Both fields render only when paired (a team name lives on the pair
+            group, and a pet name needs a partner to rename). */}
+        <Text style={[textStyles.label.style, { color: colors.text.muted.hex, marginTop: spacing.xxxl }]}>NAMES (OPTIONAL)</Text>
+        <View style={styles.card}>
+          {partnerFirstName ? (
+            <>
+              <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+                Nickname for {partnerFirstName} (optional)
+              </Text>
+              <TextInput
+                value={petName}
+                onChangeText={setPetNameValue}
+                placeholder="e.g. Coach"
+                placeholderTextColor={colors.text.muted.hex}
+                autoCapitalize="words"
+                style={styles.input}
+                accessibilityLabel={`Nickname for ${partnerFirstName}`}
+              />
+              <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+                Just for you — only you see this name.
+              </Text>
+
+              <Text style={[textStyles.caption.style, { color: colors.text.muted.hex, marginTop: spacing.lg }]}>
+                Team name (optional)
+              </Text>
+              <TextInput
+                value={teamNameValue}
+                onChangeText={setTeamNameValue}
+                placeholder="e.g. Team Us"
+                placeholderTextColor={colors.text.muted.hex}
+                autoCapitalize="words"
+                style={styles.input}
+                accessibilityLabel="Team name"
+              />
+              <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+                Shown in your feed header for you and your partner.
+              </Text>
+
+              <AppButton label="Save" onPress={() => void saveNaming()} loading={namingBusy} style={{ marginTop: spacing.lg }} />
+            </>
+          ) : (
+            <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+              Pair up with a partner to add a nickname or team name.
+            </Text>
+          )}
         </View>
 
         {/* Danger zone — discoverable, honest, not hidden. */}
@@ -150,6 +234,17 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   dangerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  input: {
+    height: 48,
+    borderRadius: radius.md,
+    backgroundColor: colors.background.overlay.hex,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
+    paddingHorizontal: spacing.lg,
+    color: colors.text.primary.hex,
+    fontSize: 16,
+    marginTop: spacing.sm,
+  },
   modalBackdrop: {
     position: 'absolute',
     top: 0,
