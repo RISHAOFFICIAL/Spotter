@@ -64,6 +64,7 @@ const model = {
   settings: require(path.join(compRoot, 'settings.js')),
   naming: require(path.join(compRoot, 'naming.js')),
   weeklyResults: require(path.join(compRoot, 'weeklyResults.js')),
+  missPromise: require(path.join(compRoot, 'missPromise.js')),
 };
 const { devMock, DEV_PAIR_GROUP_ID } = model.mock;
 const { authenticate, getStoredSession } = model.supabase;
@@ -73,6 +74,7 @@ const { getOrCreateInviteCode, lookupInvite, acceptInvite, unpair } = model.invi
 const { commitOnboarding } = model.settings;
 const { setPetName, getPetName, setTeamName } = model.naming;
 const { finalizePreviousWeek } = model.weeklyResults;
+const { getMissPromise, setMissPromise } = model.missPromise;
 
 console.log(`SPOTTER MVP two-user smoke test (dev mock)  [${RUN_ID}]`);
 console.log('');
@@ -334,6 +336,61 @@ await step('k. Weekly results snapshot: fully-elapsed week finalizes one row, id
   ok(snap.nudge_present === false, 'nudge_present should be false in v1.1 Build #1');
 
   console.log(`        weekly_results: count=1 goal=${snap.weekly_goal_snapshot} completed=${snap.completed}`);
+});
+
+await step('l. Miss promise: set (40 chars) → missed previous week → own-miss line; unpair clears; partner w/o promise gets no line', async () => {
+  // Session is A (restored at the end of step k) and A is re-paired with B.
+  const resAuthA5 = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthA5.ok, `re-auth A (step l) failed: ${resAuthA5.error}`);
+  const ctx0 = await fetchWeeklyContext();
+  ok(ctx0.ok, 'fetchWeeklyContext failed at step l start');
+  ok(ctx0.context.hasPartner === true, 'A should be paired for the miss-promise step');
+  const weekStartDay = ctx0.context.weekStartDay;
+  const goal = ctx0.context.weeklyGoal;
+
+  // 1) Set a 40-char promise (exercises trim; the ≤80 guard lives in the lib).
+  const PROMISE = 'I owe you the picnic run plus a playlist';
+  ok(PROMISE.length === 40, `fixture promise length = ${PROMISE.length} (expected 40)`);
+  const setRes = await setMissPromise(PROMISE);
+  ok(setRes.ok, `setMissPromise failed: ${setRes.error}`);
+  ok((await getMissPromise()) === PROMISE, 'promise not readable via getter (trim/roundtrip)');
+
+  // 2) Fixture a MISSED previous week, reusing the step-k time-travel pattern:
+  // advance 8 days past the CURRENT week start, so the week containing A's
+  // step-c log finalizes as missed (1 log < goal 4). Clear A's snapshots first
+  // so the fixture writes a fresh row (step k already created this key, which
+  // would otherwise make the finalize a no-op).
+  await devMock.clearResults(userA.id);
+  const curStart = weekStartFor(new Date(), weekStartDay);
+  const elapsedNow = new Date(curStart.getTime() + 8 * 24 * 60 * 60 * 1000);
+  const fix = await finalizePreviousWeek(elapsedNow, weekStartDay, goal, DEV_PAIR_GROUP_ID);
+  ok(fix.ok, `missed-week fixture failed: ${fix.error}`);
+  ok(fix.result !== undefined && fix.result.completed === false, 'fixture snapshot should record a MISSED week');
+
+  // 3) Real-now weekly context must surface the own-miss line (missed + promise).
+  const ctx = await fetchWeeklyContext();
+  ok(ctx.ok, 'fetchWeeklyContext failed after fixture');
+  ok(ctx.context.missLine?.kind === 'ownMiss', 'own-miss line missing after missed week + promise');
+  ok(ctx.context.missLine?.promise === PROMISE, `own-miss promise mismatch: ${ctx.context.missLine?.promise}`);
+
+  // 4) A partner with NO promise gets no line — even after a missed week.
+  const resAuthB3 = await authenticate(B_EMAIL, 'pass5678');
+  ok(resAuthB3.ok, `re-auth B (step l) failed: ${resAuthB3.error}`);
+  const ctxB = await fetchWeeklyContext();
+  ok(ctxB.ok, 'B fetchWeeklyContext failed');
+  ok(ctxB.context.missLine === null, 'B should have NO own-miss line (no promise set)');
+
+  // 5) Unpair (step-j style) clears the promise with the pair membership.
+  const resAuthA6 = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthA6.ok, `re-auth A (unpair) failed: ${resAuthA6.error}`);
+  const un = await unpair();
+  ok(un.ok, `unpair failed: ${un.error}`);
+  ok((await devMock.getMissPromise(userA.id)) === null, 'miss promise should clear on unpair (devMock)');
+  ok((await getMissPromise()) === null, 'getter should return null after unpair');
+  const ctxSolo = await fetchWeeklyContext();
+  ok(ctxSolo.ok && ctxSolo.context.missLine === null, 'solo A should have no own-miss line after unpair');
+
+  console.log(`        promise "${PROMISE}" → own-miss line set; B (no promise) none; unpair clears`);
 });
 
 console.log('');
