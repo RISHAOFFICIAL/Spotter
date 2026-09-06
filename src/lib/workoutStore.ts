@@ -17,6 +17,8 @@ import * as Crypto from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
 
 import { devMock, type WorkoutRow, type DevMembership, DEV_PAIR_GROUP_ID } from './mock';
+import { track } from './analytics';
+import { maybeFinalizePreviousWeek } from './weeklyResults';
 import { getPetName } from './naming';
 import { getStoredSession, supabase } from './supabase';
 import { createSignedUrls } from './storage';
@@ -164,6 +166,10 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
         }
       : null;
 
+    // V1.1: finalize the previous fully-elapsed week (best-effort snapshot;
+    // never fails the context fetch). Dev pair scope = the shared pair group.
+    await maybeFinalizePreviousWeek(new Date(), weekStartDay, weeklyGoal, DEV_PAIR_GROUP_ID);
+
     // Naming feature: pet name (local-only) + shared team name (dev pair group).
     const petName = await getPetName();
     const teamName = await devMock.getTeamName();
@@ -291,6 +297,10 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
   const weekRows = [...(ownRows ?? []), ...(partnerRows ?? [])].filter(inWeek);
   const signed = await createSignedUrls(weekRows.map((r) => r.photo_path));
 
+  // V1.1: finalize the previous fully-elapsed week (best-effort snapshot;
+  // never fails the context fetch). Real pair scope = the pair group id.
+  await maybeFinalizePreviousWeek(new Date(), weekStartDay, weeklyGoal, pairGroupId);
+
   const ownWeek = (ownRows ?? []).filter(inWeek);
   return {
     ok: true,
@@ -355,6 +365,13 @@ export async function logWorkout(input: NewWorkout): Promise<LogWorkoutResult> {
         created_at: now,
       };
       await devMock.pushWorkout(session.user.id, row);
+      // V1.1: workout_logged — references the workout id only + the weekly
+      // count (no photo path, no names — privacy guardrail).
+      void track('workout_logged', {
+        sourceId: workoutId,
+        groupId: DEV_PAIR_GROUP_ID,
+        props: { week_count: (await devMock.listWorkouts(session.user.id)).length },
+      });
       return {
         ok: true,
         log: rowToLog(
@@ -393,6 +410,8 @@ export async function logWorkout(input: NewWorkout): Promise<LogWorkoutResult> {
     const signedUrl = (await supabase.storage.from(WORKOUT_BUCKET).createSignedUrl(photoPath, 3600))
       .data?.signedUrl ?? '';
 
+    // V1.1: workout_logged — references the workout id only (no photo path).
+    void track('workout_logged', { sourceId: row.id });
     return {
       ok: true,
       log: rowToLog(
