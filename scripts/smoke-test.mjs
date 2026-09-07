@@ -107,6 +107,7 @@ const {
   runAppOpenDispatches,
   isQuietHours,
   getLocalHour,
+  setDispatchNowForTest,
   PENDING_INVITE_FIRST_MS,
   PENDING_INVITE_FOLLOWUP_MS,
   PENDING_INVITE_MAX,
@@ -121,6 +122,11 @@ console.log('');
 
 const A_EMAIL = 'alex.smoke@spotter.test';
 const B_EMAIL = 'bri.smoke@spotter.test';
+// Deterministic daytime clock for the dispatch engine: 12:00 UTC is NOT quiet
+// hours for the UTC recipient (and inside the day-cap's UTC day-key), so the
+// real dispatch paths (which read the clock themselves) pass at ANY wall-clock
+// hour — including 21:00–08:00 UTC when a `new Date()` clock would suppress.
+const DISPATCH_DAYTIME = new Date('2026-09-07T12:00:00Z');
 let userA, userB, invite;
 
 async function currentUserId() {
@@ -616,6 +622,12 @@ await step('o. Push dispatch engine: partner_logged row+dedupe, quiet-hours unit
   const resAuthA2o = await authenticate(A_EMAIL, 'pass1234');
   ok(resAuthA2o.ok, `re-auth A (step o) failed: ${resAuthA2o.error}`);
 
+  // Pin the dispatch engine to a DAYTIME clock so the real dispatch paths
+  // below (dispatchPartnerLogged + the fire-and-forget hooks, which read the
+  // clock themselves) are deterministic at ANY wall-clock hour — steps o/p
+  // must pass at 03:00 UTC too. Explicit `now` args still take precedence.
+  setDispatchNowForTest(DISPATCH_DAYTIME);
+
   // ---- 1) partner_logged: enable prefs (partner_logged ON by default), then
   // dispatch a partner workout for the CURRENT user's partner (B).
   await devMock.clearPushDeliveries(uidB);
@@ -670,6 +682,27 @@ await step('o. Push dispatch engine: partner_logged row+dedupe, quiet-hours unit
   const qhRows = await pushDeliveries(uidB);
   ok(qhRows.some((r) => r.dedupe_key === 'partner_logged:w_qh' && r.status === 'suppressed' && r.suppressed_reason === 'quiet_hours'), 'quiet-hours suppressed row missing');
 
+  // Same engine with an explicit DAYTIME clock → sent. Together with the
+  // 23:00 injected suppression above, both branches are covered
+  // deterministically forever (independent of the real wall clock).
+  await devMock.clearPushDeliveries(uidB);
+  const resDay = await dispatchPush(
+    {
+      kind: 'partner_logged',
+      recipientUserId: uidB,
+      recipientTimezone: 'UTC',
+      recipientName: 'bri.smoke',
+      eventKey: 'w_day_sent',
+      content: { workoutType: 'Run' },
+    },
+    { now: DISPATCH_DAYTIME },
+  );
+  ok(resDay && resDay.ok && resDay.status === 'sent', `daytime dispatch should send: ${JSON.stringify(resDay)}`);
+  ok(
+    (await pushDeliveries(uidB)).some((r) => r.dedupe_key === 'partner_logged:w_day_sent' && r.status === 'sent'),
+    'daytime sent row missing',
+  );
+
   // ---- 4) pending_invite: A must be SOLO with a pending invite older than 48h.
   // Unpair A (both sides solo) — invite rows in devMock survive unpair (real
   // unpair keeps the invites row; accepted flips status). We need a FRESH
@@ -685,15 +718,16 @@ await step('o. Push dispatch engine: partner_logged row+dedupe, quiet-hours unit
   const pendInv = invitesA.find((i) => i.token === freshO.token && i.status === 'pending');
   ok(pendInv !== undefined, 'A should have a pending invite after fresh generation');
 
-  // Age the invite to 49h (direct store edit: dev invites store).
-  const aged = new Date(Date.now() - PENDING_INVITE_FIRST_MS - 60 * 60 * 1000).toISOString();
+  // Age the invite to 49h relative to the pinned clock (direct store edit) so
+  // the age math is deterministic regardless of the real wall clock.
+  const aged = new Date(DISPATCH_DAYTIME.getTime() - PENDING_INVITE_FIRST_MS - 60 * 60 * 1000).toISOString();
   pendInv.created_at = aged;
   await devMock.saveInvites(uidA, invitesA);
 
   // pending_invite pref must be ON (default); run the app-open evaluation with
-  // the real clock (the invite is already 49h old in the store).
+  // the SAME pinned daytime clock (the invite is 49h old relative to it).
   await devMock.clearPushDeliveries(uidA);
-  const nowO = new Date(Date.now());
+  const nowO = DISPATCH_DAYTIME;
   const resRun = await runAppOpenDispatches({ now: nowO });
   const remindedA = await pushDeliveries(uidA);
   ok(remindedA.length === 1, `expected 1 pending_invite row, got ${remindedA.length}`);
@@ -720,7 +754,7 @@ await step('o. Push dispatch engine: partner_logged row+dedupe, quiet-hours unit
   // A is paired again).
   const resAuthA8 = await authenticate(A_EMAIL, 'pass1234');
   ok(resAuthA8.ok, `re-auth A (post-accept, step o) failed: ${resAuthA8.error}`);
-  const afterAccept = await runAppOpenDispatches({ now: new Date(Date.now()) });
+  const afterAccept = await runAppOpenDispatches({ now: DISPATCH_DAYTIME });
   ok(afterAccept.every((r) => r.status === 'skipped'), `post-accept open should skip (no pending): ${JSON.stringify(afterAccept)}`);
   ok(!(await pushDeliveries(uidA)).some((r) => r.kind === 'pending_invite' && r.dedupe_key.startsWith(`pending_invite:${pendInv.id}:2`)), 'no follow-up may fire for an accepted invite');
 
@@ -759,6 +793,11 @@ await step('p. Push copy EXACT strings + partner_logged fires from logWorkout; i
   ok(resAuthAp.ok, `re-auth A (step p) failed: ${resAuthAp.error}`);
   const uidA = userA.id;
   const uidB = userB.id;
+
+  // Keep the deterministic daytime clock for the indirect dispatch paths in
+  // this step (logWorkout → notifyPartnerLogged; acceptInvite →
+  // notifyInviteAccepted), which read the clock themselves.
+  setDispatchNowForTest(DISPATCH_DAYTIME);
 
   // 1) EXACT copy functions.
   const ia1 = pendingInviteBody('bri.smoke', 1);
@@ -832,7 +871,7 @@ await step('p. Push copy EXACT strings + partner_logged fires from logWorkout; i
   // their own, so the evaluation returns [].
   const resAuthBi = await authenticate(B_EMAIL, 'pass5678');
   ok(resAuthBi.ok, `re-auth B (invariant, step p) failed: ${resAuthBi.error}`);
-  const resBOpen = await runAppOpenDispatches({ now: new Date(Date.now()) });
+  const resBOpen = await runAppOpenDispatches({ now: DISPATCH_DAYTIME });
   ok(resBOpen.every((r) => r.status === 'skipped' || r.status === 'suppressed'), `B open should never SEND (no own pending invites): ${JSON.stringify(resBOpen)}`);
 
   console.log(`        copy exact; logWorkout → partner_logged row (dedupe by workout id); accept → invite_accepted row; B never sends pending_invite`);

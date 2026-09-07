@@ -424,6 +424,24 @@ export interface RunDispatchOptions {
   permissionOverride?: boolean | null;
 }
 
+// ---------------------------------------------------------------------------
+// Injectable clock (test-only seam — production never sets this)
+// ---------------------------------------------------------------------------
+
+/**
+ * TEST SEAM (smoke harness only): when set, `dispatchPush` /
+ * `runAppOpenDispatches` use this clock instead of `new Date()` whenever the
+ * caller did NOT pass an explicit `opts.now`. This pins the quiet-hours +
+ * day-key decisions to a deterministic time-of-day so the smoke suite passes
+ * at ANY real wall-clock hour. Production never calls the setter; the fallback
+ * chain `opts.now ?? dispatchNowOverride ?? new Date()` keeps runtime behavior
+ * byte-for-byte identical to before (override is null in production).
+ */
+let dispatchNowOverride: Date | null = null;
+export function setDispatchNowForTest(now: Date | null): void {
+  dispatchNowOverride = now;
+}
+
 /** Today's UTC day-key for the daily cap (per-recipient, all kinds). */
 function dayKey(now: Date): string {
   return now.toISOString().slice(0, 10);
@@ -475,7 +493,7 @@ async function permissionGate(recipientUserId: string, opts: RunDispatchOptions)
 export async function dispatchPush(input: DispatchInput, opts: RunDispatchOptions = {}): Promise<DispatchResult> {
   const session = await getStoredSession();
   if (!session) return { ok: false, status: 'failed', error: 'No session.' };
-  const now = opts.now ?? new Date();
+  const now = opts.now ?? dispatchNowOverride ?? new Date();
   const devMode = session.isDevMode || !supabase;
 
   // ---- (c) dedupe first — the hard anti-double-send guard.
@@ -646,7 +664,7 @@ export async function runAppOpenDispatches(opts: RunDispatchOptions = {}): Promi
   const session = await getStoredSession();
   if (!session) return [];
   const devMode = session.isDevMode || !supabase;
-  const now = opts.now ?? new Date();
+  const now = opts.now ?? dispatchNowOverride ?? new Date();
   const uid = session.user.id;
   const results: DispatchResult[] = [];
 
