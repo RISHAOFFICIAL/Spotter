@@ -250,8 +250,17 @@ export const devMock = {
   async upsertPushDevice(userId: string, device: DevPushDevice): Promise<void> {
     const rows = (await readValue<DevPushDevice[]>(`pushDevices:${userId}`)) ?? [];
     const idx = rows.findIndex((r) => r.expo_push_token === device.expo_push_token);
-    if (idx >= 0) rows[idx] = device;
-    else rows.push(device);
+    if (idx >= 0) {
+      // Idempotent re-register: preserve `created_at` (mirrors the REAL upsert,
+      // which omits created_at on conflict so the DB default survives — only
+      // last_seen_at + the other fields refresh). Without this the dev mock
+      // rewrites created_at each call, making step n's "created_at stable"
+      // assertion race on the millisecond boundary.
+      device.created_at = rows[idx].created_at;
+      rows[idx] = device;
+    } else {
+      rows.push(device);
+    }
     await writeValue(`pushDevices:${userId}`, rows);
   },
   // ---- V1.1 BUILD #3 (slice 2): dev-mock push_deliveries log ---------------
