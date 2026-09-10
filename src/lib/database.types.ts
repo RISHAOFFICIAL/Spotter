@@ -201,6 +201,16 @@ export interface Database {
     };
     Views: Record<string, never>;
     Functions: {
+      /** Leak-proof pair check (SECURITY DEFINER): true only when auth.uid() is paired with p_other. */
+      is_paired_with: {
+        Args: { p_other: string };
+        Returns: boolean;
+      };
+      /** Authenticated: resolve auth.uid()'s pair — { partner_id, pair_group_id } (both null when unpaired). SECURITY DEFINER. */
+      my_pair: {
+        Args: Record<PropertyKey, never>;
+        Returns: Json;
+      };
       /** Public (unauthenticated ok): resolve a pending invite code to the minimal Accept-screen info. */
       get_invite: {
         Args: { p_token: string };

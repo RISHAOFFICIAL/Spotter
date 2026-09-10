@@ -242,22 +242,57 @@ create policy "invites_update_own" on public.invites
 create policy "invites_delete_own" on public.invites
   for delete using (auth.uid() = inviter_id);
 
+-- ---------------------------------------------------------------------------
+-- PAIR-READ HELPERS (v1.0 release-blocking fix — the pair-feed RLS bug family,
+-- found by the real-mode smoke test 2026-09-10, report §2.1–2.3).
+--
+-- Root cause: RLS applies inside policy subqueries. The pair policies below
+-- used to join public.memberships to find the partner, but memberships only
+-- exposes OWN rows (memberships_select_own) — the partner's membership row was
+-- invisible to the caller, so the pair check was ALWAYS false in real mode and
+-- the app's client-side partner discovery saw every group as 1-member.
+--
+-- Fix: pair lookups now run inside SECURITY DEFINER functions owned by postgres
+-- with search_path pinned to public. The definer (the table owner) bypasses
+-- memberships RLS by design, yet the helpers are leak-proof: they only ever
+-- resolve auth.uid()'s OWN pair (the 2-member group the caller belongs to),
+-- return nothing for anon (auth.uid() is null), and is_paired_with's argument
+-- can only flip the boolean for the caller's own accepted partner. Stranger
+-- isolation is therefore unchanged: C is paired with nobody, so
+-- is_paired_with(C) is false for every policy.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.is_paired_with(p_other uuid)
+returns boolean
+language sql
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.memberships mine
+    join public.memberships theirs on theirs.group_id = mine.group_id
+    where mine.user_id = auth.uid()
+      and theirs.user_id = p_other
+      and mine.user_id <> theirs.user_id
+      and (select count(*) from public.memberships m where m.group_id = mine.group_id) = 2
+  );
+$$;
+
+-- Granted to anon too ONLY so anonymous policy evaluation resolves the function
+-- (the function itself still returns false for anon — auth.uid() is null). All
+-- pair-scoped reads require an authenticated caller anyway.
+revoke all on function public.is_paired_with(uuid) from public;
+grant execute on function public.is_paired_with(uuid) to anon, authenticated;
+
 -- A user may now SELECT a workout authored by their accepted pair partner.
 -- Own-row select policy above still applies (auth.uid() = user_id); this
--- policy is ADDITIVE and only fires for OTHER users' rows, and only inside a
--- group with exactly two members where I am the other member (i.e. my single
--- accepted partner).
+-- policy is ADDITIVE and only fires for OTHER users' rows, and only when the
+-- caller is truly paired with the row's author (security definer check).
 create policy "workouts_select_pair" on public.workouts
   for select using (
     auth.uid() <> user_id
-    and exists (
-      select 1
-      from public.memberships mine
-      join public.memberships theirs on theirs.group_id = mine.group_id
-      where mine.user_id = auth.uid()
-        and theirs.user_id = workouts.user_id
-        and (select count(*) from public.memberships m where m.group_id = mine.group_id) = 2
-    )
+    and public.is_paired_with(user_id)
   );
 
 -- Pair-scoped storage READ: a user may sign URLs for objects under their
@@ -267,20 +302,79 @@ create policy "workouts_storage_read_pair" on storage.objects
   for select using (
     bucket_id = 'workouts'
     and auth.role() = 'authenticated'
-    and exists (
-      select 1
-      from public.memberships mine
-      join public.memberships theirs on theirs.group_id = mine.group_id
-      where mine.user_id = auth.uid()
-        and theirs.user_id = storage.foldername(name)[1]::uuid
-        and theirs.user_id <> auth.uid()
-        and (select count(*) from public.memberships m where m.group_id = mine.group_id) = 2
+    and public.is_paired_with(storage.foldername(name)[1]::uuid)
+  );
+
+-- Pair-scoped read of the partner's users row (partner name in the feed; the
+-- app reads `users.name` for the resolved partner id from my_pair()). Own-row
+-- access stays on users_select_own; this ADDITIVE policy covers the other seat.
+create policy "users_select_pair" on public.users
+  for select using (
+    auth.uid() <> id
+    and public.is_paired_with(id)
+  );
+
+-- Pair-scoped read of the PAIR GROUP row (team_name — naming feature): both
+-- members may read the shared pair group. Own-row (membership-scoped) check
+-- only — the caller's own membership row IS visible under memberships RLS, so
+-- no security definer is needed here. Write stays creator-only
+-- (groups_update_own), exactly as before.
+--
+-- NOTE: `groups.id` must be QUALIFIED — inside the correlated subquery the
+-- bare `id` binds to memberships.id (the inner table's column shadows the
+-- outer one), which would make the check `m.group_id = m.id` → never true.
+create policy "groups_select_pair" on public.groups
+  for select using (
+    exists (
+      select 1 from public.memberships m
+      where m.group_id = groups.id and m.user_id = auth.uid()
     )
   );
 
 -- ---------------------------------------------------------------------------
 -- RPCs
 -- ---------------------------------------------------------------------------
+
+-- Authenticated: resolve auth.uid()'s pair — the other seat of their 2-member
+-- pair group. SECURITY DEFINER (same reasoning as is_paired_with: the partner's
+-- membership row is invisible under memberships RLS, so the app cannot discover
+-- the partner with plain table reads; this is the app's one approved pair
+-- discovery path). Leak-proof: no arguments, and it computes ONLY from
+-- auth.uid()'s own membership rows. Unpaired → {"partner_id": null,
+-- "pair_group_id": null}. Returns the group id too so the app can read the
+-- pair group's team_name (groups_select_pair) and target team-name writes.
+create or replace function public.my_pair()
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $function$
+declare
+  partner_id uuid;
+  pair_group_id uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'auth required';
+  end if;
+
+  select mine.group_id, theirs.user_id
+    into pair_group_id, partner_id
+  from public.memberships mine
+  join public.memberships theirs on theirs.group_id = mine.group_id
+  where mine.user_id = auth.uid()
+    and theirs.user_id <> mine.user_id
+    and (select count(*) from public.memberships m where m.group_id = mine.group_id) = 2
+  limit 1;
+
+  return jsonb_build_object(
+    'partner_id', partner_id,
+    'pair_group_id', pair_group_id
+  );
+end;
+$function$;
+
+revoke all on function public.my_pair() from public;
+grant execute on function public.my_pair() to authenticated;
 
 -- Public (unauthenticated ok): resolve a pending invite code to the minimal
 -- info the Accept landing screen needs (inviter first name + has-logs flag).

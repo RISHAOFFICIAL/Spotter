@@ -213,41 +213,25 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
     .order('logged_at', { ascending: false });
   if (ownError) return { ok: false, error: ownError.message };
 
-  // My accepted partner: the OTHER member of my pair group. A paired user
-  // belongs to TWO groups — their solo "Personal" group (1 member) and the
-  // pair group (2 members). Taking `memberships[0]` is arbitrary, so instead
-  // find the group I'm in that has EXACTLY 2 members and read its other seat.
-  const { data: myMemberships } = await supabase
-    .from('memberships')
-    .select('group_id')
-    .eq('user_id', session.user.id);
-  const myGroupIds = (myMemberships ?? []).map((m) => m.group_id);
-  let partnerId: string | null = null;
+  // My accepted partner: the OTHER member of my pair group. Discovery runs
+  // through the SECURITY DEFINER my_pair() RPC — the app cannot read the
+  // partner's membership row directly (memberships RLS exposes only own rows,
+  // which made the old raw-memberships counting see every group as 1-member
+  // and silently produce no partner in real mode). my_pair() resolves only
+  // auth.uid()'s own 2-member pair group, so stranger isolation is unchanged.
+  const { data: pairData, error: pairError } = await supabase.rpc('my_pair');
+  if (pairError) return { ok: false, error: pairError.message };
+  const pair =
+    ((typeof pairData === 'string' ? (JSON.parse(pairData || '{}') as unknown) : pairData) as unknown) as {
+      partner_id?: string | null;
+      pair_group_id?: string | null;
+    } | null;
+  const partnerId: string | null = pair?.partner_id ?? null;
+  const pairGroupId: string | null = pair?.pair_group_id ?? null;
   let partnerName = 'Partner';
   let teamName: string | null = null;
-  let pairGroupId: string | null = null;
-  if (myGroupIds.length > 0) {
-    const { data: groupMems } = await supabase
-      .from('memberships')
-      .select('group_id, user_id')
-      .in('group_id', myGroupIds);
-    const byGroup = new Map<string, string[]>();
-    for (const m of groupMems ?? []) {
-      const list = byGroup.get(m.group_id) ?? [];
-      list.push(m.user_id);
-      byGroup.set(m.group_id, list);
-    }
-    for (const [groupId, userIds] of byGroup.entries()) {
-      if (userIds.length !== 2) continue;
-      const other = userIds.find((u) => u !== session.user.id);
-      if (other) {
-        partnerId = other;
-        pairGroupId = groupId;
-        break;
-      }
-    }
-  }
   if (partnerId) {
+    // Partner name read is pair-scoped via the `users_select_pair` policy.
     const { data: partnerUser } = await supabase
       .from('users')
       .select('name')
@@ -255,9 +239,8 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
       .maybeSingle();
     if (partnerUser?.name) partnerName = partnerUser.name.split(' ')[0];
   }
-  // Naming feature: read the pair group's optional team_name (same RLS-scoped
-  // read pattern — no new tables/policies; the pair group row is visible to
-  // its members via the existing memberships-scoped select used above).
+  // Naming feature: read the pair group's optional team_name (pair-scoped
+  // `groups_select_pair` policy — both members can read; creator still writes).
   if (pairGroupId) {
     const { data: groupRow } = await supabase
       .from('groups')

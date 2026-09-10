@@ -75,32 +75,22 @@ export async function clearPetName(userId: string): Promise<void> {
  * that has EXACTLY 2 members (their solo "Personal" group has 1). Mirrors the
  * same detection used by `fetchWeeklyContext` so the write targets the same
  * group the feed reads from. Returns null when unpaired.
+ *
+ * Discovery runs through the SECURITY DEFINER my_pair() RPC (see workoutStore
+ * fetchWeeklyContext): memberships RLS hides the partner's seat, so raw
+ * memberships counting can never see a 2-member group in real mode.
  */
 async function findPairGroupId(): Promise<string | null> {
   const session = await getStoredSession();
   if (!session || !supabase) return null;
 
-  const { data: myMemberships } = await supabase
-    .from('memberships')
-    .select('group_id')
-    .eq('user_id', session.user.id);
-  const myGroupIds = (myMemberships ?? []).map((m) => m.group_id);
-  if (myGroupIds.length === 0) return null;
-
-  const { data: groupMems } = await supabase
-    .from('memberships')
-    .select('group_id, user_id')
-    .in('group_id', myGroupIds);
-  const byGroup = new Map<string, string[]>();
-  for (const m of groupMems ?? []) {
-    const list = byGroup.get(m.group_id) ?? [];
-    list.push(m.user_id);
-    byGroup.set(m.group_id, list);
-  }
-  for (const [groupId, userIds] of byGroup.entries()) {
-    if (userIds.length === 2) return groupId;
-  }
-  return null;
+  const { data, error } = await supabase.rpc('my_pair');
+  if (error) return null;
+  const pair =
+    ((typeof data === 'string' ? (JSON.parse(data || '{}') as unknown) : data) as unknown) as {
+      pair_group_id?: string | null;
+    } | null;
+  return pair?.pair_group_id ?? null;
 }
 
 /**
