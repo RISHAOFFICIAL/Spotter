@@ -1,5 +1,6 @@
 /**
- * Miss setup sheet — the pairing-time optional prompt (v1.1 Build #2, M slice).
+ * Miss setup sheet — the pairing-time optional prompt (v1.1 Build #2, M slice,
+ * Treats/Promises ledger copy per owner 2026-09-11, rev 13).
  *
  * After pairing completes for the CURRENT user (both paths: the invitee who
  * just accepted a code, and the inviter whose invite just got accepted — both
@@ -7,20 +8,27 @@
  * banner), this sheet shows ONCE per user:
  *
  *   title "If you miss a week…"
- *   body  "Leave a note for {partnerFirstName}. They'll only see it if you
- *          actually miss the week. Totally optional."
+ *   2-person body  "Leave a note for {firstName}. They'll only see it if you
+ *                  actually miss the week — and no one else will. Totally
+ *                  optional."
+ *   3-person body  "Only you and the person you pick will see it — and only if
+ *                  you actually miss the week. Totally optional." + a
+ *                  "Who's it to?" picker over the OTHER two members (the
+ *                  maker picks their witness — pair-private).
  *   TextInput (maxLength 80, placeholder "I owe you: ___")
  *   Save + Skip (Skip = no promise, never re-asks aggressively)
  *
+ * The witness picker is shown ONLY when the group has 3+ members; in a
+ * 2-person group the witness auto-resolves to the other member (the RPC
+ * ignores any choice — the sheet hides the picker entirely, per spec §5).
+ *
  * A per-user 'prompted' flag persists in AsyncStorage (same pattern family as
  * the pet-name preference in naming.ts): once shown — via Save OR Skip — the
- * sheet never re-asks for that user. Saving writes through setMissPromise
- * (trim, ≤80 enforced in the lib); Skip writes nothing. Neutral tone only —
- * this is a personal note, never a wager/enforcement, and nothing here
- * describes it as one.
- *
- * Sheet chrome mirrors InviteSheet (Modal + scrim tap-to-dismiss + drag
- * handle + bottom sheet) so the pairing-time moment feels like one flow.
+ * sheet never re-asks for that user. Saving writes through setMissNote (trim,
+ * ≤80 enforced in the lib; empty save == Skip). Neutral tone only — this is a
+ * personal note, never a wager/enforcement, and nothing here describes it as
+ * one. Copy: exact §4 strings FROM src/lib/promises.ts (curly apostrophes,
+ * never the word "partner", no monetary language).
  */
 import React, { useEffect, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -29,7 +37,20 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
-import { MISS_PROMISE_MAX, setMissPromise, markMissPromptSeen } from '@/lib/missPromise';
+import { MISS_PROMISE_MAX, setMissNote, markMissPromptSeen } from '@/lib/missPromise';
+import {
+  LEDGER_FRAMING_LINE,
+  MISSSET_2P_BODY,
+  MISSSET_3P_BODY,
+  MISSSET_PICKER_LABEL,
+  STAKES_PREVIEW_PAIR_LINE,
+} from '@/lib/promises';
+
+/** One selectable witness candidate (a co-member of the maker's group). */
+export interface WitnessChoice {
+  id: string;
+  name: string;
+}
 
 // The once-per-user "prompted" flag lives in src/lib/missPromise.ts
 // (hasSeenMissPrompt / markMissPromptSeen / clearMissPromptSeen) so the smoke
@@ -38,21 +59,35 @@ import { MISS_PROMISE_MAX, setMissPromise, markMissPromptSeen } from '@/lib/miss
 
 export function MissSetupSheet({
   visible,
+  /** The single co-member's first name in a 2-person group (null when solo). */
   partnerFirstName,
+  /**
+   * Witness candidates = the group's co-members. Length 1 in a 2-person group
+   * (picker hidden, witness auto-resolves); length 2+ in a 3-person group
+   * (picker shown — "Who's it to?"). Empty when solo (sheet not shown).
+   */
+  witnessChoices,
   onDone,
 }: {
   visible: boolean;
   partnerFirstName: string | null;
+  witnessChoices: WitnessChoice[];
   onDone: (saved: boolean) => void;
 }) {
   const insets = useSafeAreaInsets();
   const [text, setText] = useState('');
+  const [witnessId, setWitnessId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 3+ group -> require a pick before Save is meaningful; default to none.
+  const needsPick = witnessChoices.length >= 2;
+  const pickerVisible = needsPick;
 
   useEffect(() => {
     if (visible) {
       setText('');
+      setWitnessId(null);
       setError(null);
       setBusy(false);
     }
@@ -71,9 +106,13 @@ export function MissSetupSheet({
       await finish(false);
       return;
     }
+    if (needsPick && !witnessId) {
+      setError('Choose who it\u2019s to.');
+      return;
+    }
     setBusy(true);
     setError(null);
-    const res = await setMissPromise(trimmed);
+    const res = await setMissNote(trimmed, witnessId);
     setBusy(false);
     if (!res.ok) {
       setError(res.error ?? 'Could not save. Try again.');
@@ -87,6 +126,8 @@ export function MissSetupSheet({
     await finish(false);
   };
 
+  const body = needsPick ? MISSSET_3P_BODY : MISSSET_2P_BODY.replace('{firstName}', partnerFirstName ?? 'them');
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={() => void skip()}>
       <Pressable accessibilityRole="button" accessibilityLabel="Close" style={styles.scrim} onPress={() => void skip()} />
@@ -99,8 +140,42 @@ export function MissSetupSheet({
           If you miss a week…
         </Text>
         <Text style={[textStyles.caption.style, styles.body]}>
-          Leave a note for {partnerFirstName ?? 'your partner'}. They&apos;ll only see it if you actually miss the week. Totally optional.
+          {body}
         </Text>
+        {pickerVisible && (
+          <View style={styles.pickerBlock}>
+            <Text style={[textStyles.label.style, { color: colors.text.muted.hex }]}>
+              {MISSSET_PICKER_LABEL}
+            </Text>
+            <View style={styles.pickerRow}>
+              {witnessChoices.map((c) => {
+                const selected = witnessId === c.id;
+                return (
+                  <Pressable
+                    key={c.id}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Promise to ${c.name}`}
+                    onPress={() => setWitnessId(c.id)}
+                    style={({ pressed }) => [
+                      styles.choice,
+                      selected && styles.choiceSelected,
+                      pressed && { opacity: 0.9 },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        textStyles.captionStrong.style,
+                        { color: selected ? colors.text.onVolt.hex : colors.text.primary.hex },
+                      ]}
+                    >
+                      {c.name}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+        )}
         <TextInput
           value={text}
           onChangeText={setText}
@@ -112,6 +187,9 @@ export function MissSetupSheet({
           accessibilityLabel="Miss note — what I owe if I miss the week"
           onSubmitEditing={() => void save()}
         />
+        <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+          {STAKES_PREVIEW_PAIR_LINE} {LEDGER_FRAMING_LINE}
+        </Text>
         {error && (
           <Text style={[textStyles.caption.style, { color: colors.text.danger.hex, textAlign: 'center' }]}>
             {error}
@@ -151,6 +229,20 @@ const styles = StyleSheet.create({
   close: { position: 'absolute', top: spacing.md, right: spacing.md, width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   headline: { color: colors.text.primary.hex, marginTop: spacing.sm },
   body: { color: colors.text.secondary.hex, paddingRight: spacing.xl },
+  pickerBlock: { gap: spacing.sm },
+  pickerRow: { flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' },
+  choice: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    backgroundColor: colors.background.overlay.hex,
+  },
+  choiceSelected: {
+    backgroundColor: colors.brand.primary.hex,
+    borderColor: colors.brand.primary.hex,
+  },
   input: {
     height: 48,
     borderRadius: radius.md,

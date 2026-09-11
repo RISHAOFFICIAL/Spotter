@@ -1038,3 +1038,260 @@ create policy "push_deliveries_delete_own" on public.push_deliveries
 alter table public.memberships add column if not exists miss_promise text
   check (miss_promise is null or char_length(miss_promise) <= 80);
 -- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- TREATS/PROMISES LEDGER (owner decision 2026-09-11, rev 13 — pair-private).
+-- The locked rule: each promise entry is visible ONLY to the promise-maker and
+-- their one chosen witness — never the whole group, at any group size. The
+-- data model carries witness identity so the rule scales unchanged to 20+
+-- member groups. In a 2-person group the witness is automatic (the other
+-- member); in a 3-person group the maker chooses.
+--
+-- Two additive memberships ALTERs:
+--   miss_witness_id — the member's note is "to" this person; null = not
+--                     chosen yet. ON DELETE SET NULL (never cascade — cascade
+--                     would delete the MAKER's membership row when the witness
+--                     leaves the app).
+--   miss_witness_not_self — a promise can never be "to" yourself.
+-- Both ride the EXISTING own-row policies with miss_promise (a user can only
+-- ever read/write their own membership row), so NO memberships policy changes.
+-- ---------------------------------------------------------------------------
+alter table public.memberships
+  add column if not exists miss_witness_id uuid
+    references public.users (id) on delete set null;
+alter table public.memberships
+  add constraint miss_witness_not_self
+  check (miss_witness_id is null or miss_witness_id <> user_id);
+
+-- promise_entries: one row per missed-week promise, created at week rollover
+-- by record_missed_promise(). witness_id SNAPSHOTS the witness at miss time
+-- exactly like promise_text — history never rewrites. Unique
+-- (membership_id, week_start) makes re-rollover idempotent; entries cascade
+-- with the maker's membership row ("cleared on leaving"). No group_id column:
+-- visibility/fetch never filter by group in v1.0 (one shared group per user).
+create table if not exists public.promise_entries (
+  id uuid primary key default gen_random_uuid(),
+  membership_id uuid not null references public.memberships (id) on delete cascade,
+  user_id uuid not null references public.users (id) on delete cascade,        -- maker
+  witness_id uuid not null references public.users (id) on delete cascade,     -- SNAPSHOT at miss time
+  promise_text text not null check (char_length(promise_text) between 1 and 80),
+  week_start timestamptz not null,
+  state text not null default 'open' check (state in ('open','kept','let_go')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (membership_id, week_start)
+);
+create index if not exists promise_entries_witness_idx on public.promise_entries (witness_id, state);
+create index if not exists promise_entries_maker_idx  on public.promise_entries (user_id, week_start desc);
+
+-- RLS: ONE policy — a pure pair-column select (auth.uid() = user_id OR
+-- witness_id). No subquery, no security-definer inside the policy. NO
+-- INSERT/UPDATE/DELETE policies AT ALL: the only write paths are the
+-- security-definer RPCs below, so a direct client INSERT/UPDATE can never mint
+-- or mutate an entry. Stranger isolation: C can never see A->B's promise, even
+-- in the same group.
+alter table public.promise_entries enable row level security;
+
+drop policy if exists "promise_entries_select_pair" on public.promise_entries;
+create policy "promise_entries_select_pair" on public.promise_entries
+  for select using (
+    auth.uid() = user_id or auth.uid() = witness_id
+  );
+
+-- record_missed_promise(p_week_start): client calls at week rollover when the
+-- maker missed. Idempotent (unique (membership_id, week_start)) and
+-- never-shaming (no note set -> no-op, never an error). The witness re-check
+-- runs INSIDE the definer (memberships RLS is bypassed by ownership): a client
+-- that wrote a stranger id into its own miss_witness_id can never mint an
+-- entry visible to that stranger.
+create or replace function public.record_missed_promise(p_week_start timestamptz)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $function$
+declare
+  my_id uuid := auth.uid();
+  gid uuid;
+  maker_membership uuid;
+  maker_text text;
+  maker_witness uuid;
+  inserted_id uuid;
+begin
+  if my_id is null then
+    raise exception 'auth required';
+  end if;
+
+  -- 1. Resolve the caller's shared-group membership (>=2 members, same shape
+  --    as my_group()).
+  select mine.group_id into gid
+    from public.memberships mine
+   where mine.user_id = my_id
+     and (select count(*) from public.memberships m where m.group_id = mine.group_id) >= 2
+   order by mine.created_at desc
+   limit 1;
+  if gid is null then
+    return jsonb_build_object('ok', true, 'created', false);
+  end if;
+
+  -- 2. Require the maker's own note; else no-op (never shaming).
+  select m.id, m.miss_promise, m.miss_witness_id
+    into maker_membership, maker_text, maker_witness
+    from public.memberships m
+   where m.user_id = my_id and m.group_id = gid;
+  if maker_membership is null or maker_text is null or btrim(maker_text) = '' then
+    return jsonb_build_object('ok', true, 'created', false);
+  end if;
+
+  -- 3. Require a witness and RE-VALIDATE it is a current co-member != self
+  --    (security-definer read; closes the stranger-witness leak vector).
+  if maker_witness is null
+     or not exists (
+       select 1 from public.memberships theirs
+        where theirs.group_id = gid
+          and theirs.user_id = maker_witness
+          and theirs.user_id <> my_id
+     ) then
+    raise exception 're-pick who your promise is to';
+  end if;
+
+  -- 4. Insert with on-conflict-idempotency. `returning id into inserted_id`
+  --    yields NULL for the conflicted (already-created) row.
+  insert into public.promise_entries
+    (membership_id, user_id, witness_id, promise_text, week_start, state)
+  values
+    (maker_membership, my_id, maker_witness, maker_text, p_week_start, 'open')
+  on conflict (membership_id, week_start) do nothing
+  returning id into inserted_id;
+
+  return jsonb_build_object('ok', true, 'created', inserted_id is not null);
+end;
+$function$;
+
+revoke all on function public.record_missed_promise(timestamptz) from public;
+grant execute on function public.record_missed_promise(timestamptz) to authenticated;
+
+-- resolve_promise(p_entry_id, p_state): promise-maker ONLY; the witness gets
+-- NO resolve tap (passive, see-only). Only open -> kept / open -> let_go.
+create or replace function public.resolve_promise(p_entry_id uuid, p_state text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $function$
+declare
+  my_id uuid := auth.uid();
+  entry_user uuid;
+  entry_state text;
+begin
+  if my_id is null then
+    raise exception 'auth required';
+  end if;
+
+  select user_id, state into entry_user, entry_state
+    from public.promise_entries
+   where id = p_entry_id;
+
+  -- Unknown id is indistinguishable from someone else's entry (privacy: never
+  -- reveal whether an entry exists to a non-maker).
+  if entry_user is null or entry_user <> my_id then
+    raise exception 'only the person who made this promise can settle it';
+  end if;
+
+  if p_state not in ('kept', 'let_go') then
+    raise exception 'invalid settle state';
+  end if;
+
+  if entry_state <> 'open' then
+    raise exception 'already settled';
+  end if;
+
+  update public.promise_entries
+     set state = p_state, updated_at = now()
+   where id = p_entry_id;
+
+  return jsonb_build_object('ok', true);
+end;
+$function$;
+
+revoke all on function public.resolve_promise(uuid, text) from public;
+grant execute on function public.resolve_promise(uuid, text) to authenticated;
+
+-- set_miss_note(p_text, p_witness_id): the note-set write path (replaces the
+-- old direct memberships.update used by the pre-ledger build). Trim + <=80;
+-- empty clears BOTH columns. 2-person group -> the other member (p_witness_id
+-- ignored); 3+ -> p_witness_id must be a current co-member != self.
+create or replace function public.set_miss_note(p_text text, p_witness_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $function$
+declare
+  my_id uuid := auth.uid();
+  gid uuid;
+  member_total int;
+  other_id uuid;
+  resolved_witness uuid := p_witness_id;
+  trimmed text := btrim(coalesce(p_text, ''));
+begin
+  if my_id is null then
+    raise exception 'auth required';
+  end if;
+
+  if char_length(trimmed) > 80 then
+    raise exception 'keep it under 80 characters';
+  end if;
+
+  -- Empty -> clear both columns on the caller's own membership row(s) and
+  -- return (clearing is always allowed, even solo).
+  if trimmed = '' then
+    update public.memberships
+       set miss_promise = null, miss_witness_id = null
+     where user_id = my_id;
+    return jsonb_build_object('ok', true, 'witness_id', null);
+  end if;
+
+  -- Resolve the caller's shared-group membership (>=2 members).
+  select mine.group_id into gid
+    from public.memberships mine
+   where mine.user_id = my_id
+     and (select count(*) from public.memberships m where m.group_id = mine.group_id) >= 2
+   order by mine.created_at desc
+   limit 1;
+  if gid is null then
+    raise exception 'pair up with someone first';
+  end if;
+
+  select count(*) into member_total from public.memberships where group_id = gid;
+
+  if member_total = 2 then
+    -- Auto-resolve: the OTHER member; ignore p_witness_id entirely.
+    select theirs.user_id into other_id
+      from public.memberships theirs
+     where theirs.group_id = gid and theirs.user_id <> my_id
+     limit 1;
+    resolved_witness := other_id;
+  else
+    -- 3+: p_witness_id must be a current co-member != self.
+    if resolved_witness is null
+       or not exists (
+         select 1 from public.memberships theirs
+          where theirs.group_id = gid
+            and theirs.user_id = resolved_witness
+            and theirs.user_id <> my_id
+       ) then
+      raise exception 'choose who this promise is to';
+    end if;
+  end if;
+
+  update public.memberships
+     set miss_promise = trimmed, miss_witness_id = resolved_witness
+   where user_id = my_id and group_id = gid;
+
+  return jsonb_build_object('ok', true, 'witness_id', resolved_witness);
+end;
+$function$;
+
+revoke all on function public.set_miss_note(text, uuid) from public;
+grant execute on function public.set_miss_note(text, uuid) to authenticated;

@@ -414,6 +414,7 @@ export default function HomeScreen() {
       <MissSetupSheet
         visible={missSheetOpen}
         partnerFirstName={partnerFirstName ?? null}
+        witnessChoices={(ctx?.members ?? []).map((m) => ({ id: m.id, name: m.displayName }))}
         onDone={() => {
           setMissSheetOpen(false);
           // A saved note changes the own-miss surface — refresh quietly so a

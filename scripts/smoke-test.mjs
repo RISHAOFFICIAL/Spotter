@@ -67,6 +67,7 @@ const model = {
   naming: require(path.join(compRoot, 'naming.js')),
   weeklyResults: require(path.join(compRoot, 'weeklyResults.js')),
   missPromise: require(path.join(compRoot, 'missPromise.js')),
+  promises: require(path.join(compRoot, 'promises.js')),
   notificationPrefs: require(path.join(compRoot, 'notificationPrefs.js')),
   notifications: require(path.join(compRoot, 'notifications.js')),
   pushRegistration: require(path.join(compRoot, 'pushRegistration.js')),
@@ -81,7 +82,15 @@ const { getOrCreateInviteCode, lookupInvite, acceptInvite, leaveGroup, friendlyA
 const { commitOnboarding } = model.settings;
 const { setPetName, getPetName, setTeamName } = model.naming;
 const { finalizePreviousWeek, previousWeekRange } = model.weeklyResults;
-const { getMissPromise, setMissPromise, hasSeenMissPrompt, markMissPromptSeen, clearMissPromptSeen } = model.missPromise;
+const { getMissPromise, setMissNote, getMissWitnessId, hasSeenMissPrompt, markMissPromptSeen, clearMissPromptSeen } = model.missPromise;
+const {
+  fetchLedger,
+  resolvePromise,
+  recordMissedPromise,
+  getOpenPromiseCount,
+  LEDGER_FRAMING_LINE,
+  PROMISES_SCREEN_TITLE,
+} = model.promises;
 const { getNotificationPrefs, setNotificationPref, defaultNotificationPrefs, NOTIFICATION_DEFAULTS } = model.notificationPrefs;
 const {
   getNotificationPermissionState,
@@ -418,10 +427,14 @@ await step('l. Miss promise: set (40 chars) → missed previous week → own-mis
   const goal = ctx0.context.weeklyGoal;
 
   // 1) Set a 40-char promise (exercises trim; the ≤80 guard lives in the lib).
+  //    Ledger (owner 09-11): 2-person group → the witness AUTO-RESOLVES to the
+  //    other member (B); a passed witness id is ignored, exactly like the RPC.
   const PROMISE = 'I owe you the picnic run plus a playlist';
   ok(PROMISE.length === 40, `fixture promise length = ${PROMISE.length} (expected 40)`);
-  const setRes = await setMissPromise(PROMISE);
-  ok(setRes.ok, `setMissPromise failed: ${setRes.error}`);
+  const setRes = await setMissNote(PROMISE, 'some-stranger-id-ignored-in-2p');
+  ok(setRes.ok, `setMissNote failed: ${setRes.error}`);
+  ok(setRes.witnessId === userB.id, `witness auto-resolve = ${setRes.witnessId} (expected B ${userB.id})`);
+  ok((await devMock.getMissWitnessId(userA.id)) === userB.id, 'devMock witness should be B after auto-resolve');
   ok((await getMissPromise()) === PROMISE, 'promise not readable via getter (trim/roundtrip)');
 
   // 2) Fixture a MISSED previous week, reusing the step-k time-travel pattern:
@@ -487,8 +500,8 @@ await step('m. Partner MissCard: B missed last week + B promise → A feed card 
   ok(B_PROMISE.length <= 80, `B promise length = ${B_PROMISE.length}`);
   const resAuthB4 = await authenticate(B_EMAIL, 'pass5678');
   ok(resAuthB4.ok, `re-auth B (set promise) failed: ${resAuthB4.error}`);
-  const setB = await setMissPromise(B_PROMISE);
-  ok(setB.ok, `B setMissPromise failed: ${setB.error}`);
+  const setB = await setMissNote(B_PROMISE, null);
+  ok(setB.ok, `B setMissNote failed: ${setB.error}`);
   ok((await getMissPromise()) === B_PROMISE, 'B promise not readable via getter');
 
   // 2) Prompted-flag skip-flow (lib-level, dev+real parity): unset → prompt
@@ -1237,6 +1250,314 @@ await step('w. Duplicate join: re-entry never double-seats (already-member guard
     `already-in copy: ${friendlyAcceptError('you are already in this group')}`,
   );
   console.log(`        repeated joins: no double seats anywhere; already-in copy verified`);
+});
+
+// ===========================================================================
+// TREATS/PROMISES LEDGER (owner 2026-09-11, rev 13 — pair-private). Steps
+// x–z run LAST: the dev store mirrors the REAL promise_entries table + the
+// three security-definer RPCs (set_miss_note / record_missed_promise /
+// resolve_promise), including pair-column visibility, idempotency, maker-only
+// settle and the stranger-witness re-validation backstop.
+// ===========================================================================
+
+await step('x. Ledger (clean 2-person pair): set_miss_note auto-resolves witness; record idempotent + silent-when-no-note; pair-scoped ledger; maker-only settle; open badge', async () => {
+  // --- Clean slate: dissolve everyone out of the shared dev pair group so a
+  // fresh A+B pair is EXACTLY 2 seats (A, B, zoe, crew all hold seats after
+  // steps q/v; zoe+crew being seated is what makes the earlier steps 4-seat).
+  for (const [email, pw] of [
+    [A_EMAIL, 'pass1234'],
+    [B_EMAIL, 'pass5678'],
+    [ZOE_EMAIL, 'pass1234'],
+  ]) {
+    const authRes = await authenticate(email, pw);
+    ok(authRes.ok, `re-auth ${email} (ledger cleanup) failed: ${authRes.error}`);
+    const lv = await leaveGroup();
+    ok(lv.ok, `leaveGroup failed for ${email}: ${lv.error}`);
+  }
+  const ctxClean = await fetchWeeklyContext();
+  ok(ctxClean.ok && ctxClean.context.members.length === 0, 'pair group should be dissolved after cleanup (solo)');
+
+  // --- Fresh 2-person pair A+B ----------------------------------------------
+  const resAuthXa = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthXa.ok, `re-auth A (step x) failed: ${resAuthXa.error}`);
+  await removeItem('spotter.invite:v1');
+  const freshX = await getOrCreateInviteCode();
+  ok(/^DEV-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(freshX.displayCode), `fresh code format: ${freshX.displayCode}`);
+  const resAuthXb = await authenticate(B_EMAIL, 'pass5678');
+  ok(resAuthXb.ok, `re-auth B (accept, step x) failed: ${resAuthXb.error}`);
+  const accX = await acceptInvite(freshX.displayCode);
+  ok(accX.ok, `re-pair accept failed (step x): ${accX.error}`);
+  const resAuthXa2 = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthXa2.ok, `re-auth A (step x assert) failed: ${resAuthXa2.error}`);
+  const ctxX = await fetchWeeklyContext();
+  ok(ctxX.ok && ctxX.context.members.length === 1, 'A should be in a clean 2-person pair');
+  ok(ctxX.context.members[0]?.id === userB.id, `A co-member = ${ctxX.context.members[0]?.id} (expected B)`);
+
+  // --- (d) set_miss_note auto-resolve in a 2-person group: a stranger id
+  // passed is IGNORED; the witness resolves to the OTHER member.
+  const A_NOTE = 'a cold brew';
+  const W0 = '2026-08-24T00:00:00.000Z';
+  const setXA = await setMissNote(A_NOTE, 'stranger-id-ignored-in-2p');
+  ok(setXA.ok, `A setMissNote failed: ${setXA.error}`);
+  ok(setXA.witnessId === userB.id, `A witness = ${setXA.witnessId} (expected B — auto-resolve)`);
+  ok((await devMock.getMissWitnessId(userA.id)) === userB.id, 'devMock witness for A should be B');
+  // A misses W0 → A→B entry (A is the maker of a real pair entry).
+  const recA = await recordMissedPromise(W0);
+  ok(recA.ok && recA.created === true, `A record failed: ${JSON.stringify(recA)}`);
+  // Idempotency: A re-records the SAME week → no-op (unique membership+week).
+  const recA2 = await recordMissedPromise(W0);
+  ok(recA2.ok && recA2.created === false, `A record #2 must be a no-op (${JSON.stringify(recA2)})`);
+
+  // --- (b) silent skip: B records with NO note set → {ok, created:false}.
+  const resAuthXb2 = await authenticate(B_EMAIL, 'pass5678');
+  ok(resAuthXb2.ok, `re-auth B (no-note record) failed: ${resAuthXb2.error}`);
+  const W1 = '2026-08-31T00:00:00.000Z';
+  const noNote = await recordMissedPromise(W1);
+  ok(noNote.ok, `record with no note should be ok: ${noNote.error}`);
+  ok(noNote.created === false, 'record with no note must NOT create an entry (never shaming)');
+
+  // --- B sets THEIR note; witness auto-resolves to A ------------------------
+  const B_NOTE = 'the dishes';
+  const setXB = await setMissNote(B_NOTE, null);
+  ok(setXB.ok, `B setMissNote failed: ${setXB.error}`);
+  ok(setXB.witnessId === userA.id, `B witness = ${setXB.witnessId} (expected A)`);
+
+  // --- (b) idempotency: first record creates, second call no-ops ------------
+  const rec1 = await recordMissedPromise(W1);
+  ok(rec1.ok && rec1.created === true, `B record #1 should create (${JSON.stringify(rec1)})`);
+  const rec2 = await recordMissedPromise(W1);
+  ok(rec2.ok && rec2.created === false, `B record #2 must be a no-op (${JSON.stringify(rec2)})`);
+
+  // --- (a) pair-scoped ledger: B sees own entry (maker) + A→B (witness);
+  // nobody else's rows, ever.
+  const ledgerB = await fetchLedger();
+  ok(ledgerB.length === 2, `B ledger = ${ledgerB.length} rows (expected 2: own + A→B)`);
+  const bOwn = ledgerB.find((e) => e.makerId === userB.id);
+  ok(bOwn && bOwn.witnessId === userA.id, 'B own entry should witness A');
+  ok(bOwn && bOwn.state === 'open', 'B own entry should be open');
+  ok(bOwn && bOwn.promiseText === B_NOTE, `B promise text = ${bOwn?.promiseText}`);
+  const aToB = ledgerB.find((e) => e.makerId === userA.id);
+  ok(aToB && aToB.witnessId === userB.id, 'A→B entry visible to B (witness)');
+  ok(ledgerB.every((e) => e.makerId === userA.id || e.makerId === userB.id), 'B must never see entries from anyone else');
+  ok(!ledgerB.some((e) => e.makerName === 'A member'), 'all pair names should resolve in the 2-person pair');
+
+  // --- (c) resolve_promise maker-only: the WITNESS (A) gets a raised error;
+  // an unknown entry id is indistinguishable from a non-maker's.
+  const resAuthXa3 = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthXa3.ok, `re-auth A (witness settle attempt) failed: ${resAuthXa3.error}`);
+  const settleAsWitness = await resolvePromise(bOwn.id, 'kept');
+  ok(!settleAsWitness.ok, 'witness settle must fail');
+  ok(
+    settleAsWitness.error === 'only the person who made this promise can settle it',
+    `witness settle error = ${settleAsWitness.error}`,
+  );
+  const settleUnknown = await resolvePromise('no-such-entry', 'kept');
+  ok(
+    !settleUnknown.ok && settleUnknown.error === 'only the person who made this promise can settle it',
+    'unknown id must be indistinguishable from a non-maker entry (privacy)',
+  );
+
+  // --- maker settles open → kept; re-settle raises 'already settled' --------
+  const resAuthXb3 = await authenticate(B_EMAIL, 'pass5678');
+  ok(resAuthXb3.ok, `re-auth B (maker settle) failed: ${resAuthXb3.error}`);
+  const settleMaker = await resolvePromise(bOwn.id, 'kept');
+  ok(settleMaker.ok, `maker settle failed: ${settleMaker.error}`);
+  const ledgerB2 = await fetchLedger();
+  ok(ledgerB2.find((e) => e.id === bOwn.id)?.state === 'kept', 'B own entry should now be KEPT');
+  const settleAgain = await resolvePromise(bOwn.id, 'let_go');
+  ok(!settleAgain.ok && settleAgain.error === 'already settled', `re-settle error = ${settleAgain.error}`);
+
+  // --- badges = open entries where I am maker OR witness (no double count) --
+  // A: maker of A→B (open) + witness of B→A (kept) → 1 open. B: 0 open.
+  ok((await getOpenPromiseCount()) === 1, `A open-promise badge = ${await getOpenPromiseCount()} (expected 1)`);
+  ok((await getOpenPromiseCount()) === 1, 'A badge unchanged on re-count (deterministic)');
+  console.log(`        pair: auto-resolve witness; idempotent record; silent no-note; pair-scoped; maker-only settle; badge=1`);
+  const openCountAFinally = await getOpenPromiseCount();
+  ok(openCountAFinally === 1, `A final badge = ${openCountAFinally}`);
+});
+
+await step('y. Ledger (3-person demo group): witness pick honored + pick required + self/stranger rejected; pair-scoping proven BOTH ways (maya sees crew→maya but never crew→jules; jules the mirror); maker-only settle for witnesses AND strangers; stranger-witness backstop fail-closed', async () => {
+  // --- (d) 3+ group: a pick is REQUIRED; self and strangers are rejected ---
+  const resAuthYc = await authenticate(CREW_EMAIL, 'pass1234');
+  ok(resAuthYc.ok, `re-auth crew (step y) failed: ${resAuthYc.error}`);
+  const noPick = await setMissNote('an extra run', null);
+  ok(!noPick.ok && noPick.error === 'choose who this promise is to', `no-pick error = ${noPick.error}`);
+  const selfPick = await setMissNote('an extra run', userCrew.id);
+  ok(!selfPick.ok && selfPick.error === 'choose who this promise is to', `self-pick error = ${selfPick.error}`);
+  const strangerPick = await setMissNote('an extra run', userZoe.id);
+  ok(!strangerPick.ok && strangerPick.error === 'choose who this promise is to', `stranger-pick error = ${strangerPick.error}`);
+
+  // --- crew misses TWO different weeks: entry1 crew→maya (first witness),
+  // entry2 crew→jules (witness re-picked BEFORE the second miss) — the
+  // snapshot semantics means each entry carries the witness at ITS miss time.
+  const setCrewMaya = await setMissNote('an extra run', MAYA_ID);
+  ok(setCrewMaya.ok && setCrewMaya.witnessId === MAYA_ID, `crew→maya witness = ${setCrewMaya.witnessId} (expected maya)`);
+  const W2a = '2026-08-31T00:00:00.000Z';
+  const recCrew1 = await recordMissedPromise(W2a);
+  ok(recCrew1.ok && recCrew1.created === true, `crew record #1 (→maya) failed: ${JSON.stringify(recCrew1)}`);
+  const setCrewJules = await setMissNote('a cold brew', JULES_ID);
+  ok(setCrewJules.ok && setCrewJules.witnessId === JULES_ID, `crew→jules witness = ${setCrewJules.witnessId} (expected jules)`);
+  const W2b = '2026-09-07T00:00:00.000Z';
+  const recCrew2 = await recordMissedPromise(W2b);
+  ok(recCrew2.ok && recCrew2.created === true, `crew record #2 (→jules) failed: ${JSON.stringify(recCrew2)}`);
+  const crewLedger = await fetchLedger();
+  const crewToMaya = crewLedger.find((e) => e.makerId === userCrew.id && e.witnessId === MAYA_ID);
+  const crewToJules = crewLedger.find((e) => e.makerId === userCrew.id && e.witnessId === JULES_ID);
+  ok(crewToMaya && crewToJules, 'crew should see BOTH own entries (maker)');
+  ok(crewLedger.length === 2, `crew ledger = ${crewLedger.length} (expected 2 own entries)`);
+
+  // --- (a) STRANGER ISOLATION, both directions, same group: maya sees the
+  // crew→maya entry (she is ITS witness) but NEVER crew→jules; jules sees the
+  // mirror (crew→jules yes, crew→maya no). RLS blocks the pair-column filter
+  // in real mode; devMock applies the identical filter.
+  const resAuthYm = await authenticate(MAYA_EMAIL, 'pass1234');
+  ok(resAuthYm.ok, `re-auth maya (step y) failed: ${resAuthYm.error}`);
+  const mayaLedger0 = await fetchLedger();
+  ok(
+    mayaLedger0.some((e) => e.id === crewToMaya.id),
+    'maya (witness) must see crew→maya',
+  );
+  ok(
+    !mayaLedger0.some((e) => e.id === crewToJules.id),
+    'maya must NEVER see crew→jules (stranger to that pair, same group)',
+  );
+  // Maya sets her own note (witness jules) + misses → maya→jules entry.
+  const setMayaJules = await setMissNote('the dishes', JULES_ID);
+  ok(setMayaJules.ok, `maya setMissNote failed: ${setMayaJules.error}`);
+  const W3 = '2026-09-14T00:00:00.000Z';
+  const recMaya = await recordMissedPromise(W3);
+  ok(recMaya.ok && recMaya.created === true, `maya record failed: ${JSON.stringify(recMaya)}`);
+  const mayaLedger = await fetchLedger();
+  ok(mayaLedger.length === 2, `maya ledger = ${mayaLedger.length} (expected 2: crew→maya + own)`);
+  ok(mayaLedger.some((e) => e.makerId === MAYA_ID && e.witnessId === JULES_ID), 'maya should see her own entry');
+  ok(mayaLedger.every((e) => e.makerId === MAYA_ID || e.witnessId === MAYA_ID), 'maya must only see rows where she is maker OR witness');
+
+  // --- jules' view: crew→jules (witness) + maya→jules (witness); NEVER
+  // crew→maya (a pair she is a stranger to).
+  const resAuthYj = await authenticate(JULES_EMAIL, 'pass1234');
+  ok(resAuthYj.ok, `re-auth jules (step y) failed: ${resAuthYj.error}`);
+  const julesLedger = await fetchLedger();
+  ok(julesLedger.length === 2, `jules ledger = ${julesLedger.length} (expected 2: crew→jules + maya→jules)`);
+  ok(julesLedger.some((e) => e.id === crewToJules.id), 'jules should see crew→jules (she is the witness)');
+  ok(julesLedger.some((e) => e.makerId === MAYA_ID), 'jules should see maya→jules (she is the witness)');
+  ok(!julesLedger.some((e) => e.id === crewToMaya.id), 'jules must NEVER see crew→maya (stranger to that pair)');
+
+  // --- (c) maker-only: jules (WITNESS of maya's entry) and crew (a stranger
+  // to maya↔jules) both get the raised error; maya (maker) settles.
+  const mayaEntry = julesLedger.find((e) => e.makerId === MAYA_ID);
+  const resAuthYj2 = await authenticate(JULES_EMAIL, 'pass1234');
+  ok(resAuthYj2.ok, `re-auth jules (settle attempt) failed: ${resAuthYj2.error}`);
+  const settleAsWitness2 = await resolvePromise(mayaEntry.id, 'kept');
+  ok(!settleAsWitness2.ok, 'witness settle must fail (3-person too)');
+  ok(settleAsWitness2.error === 'only the person who made this promise can settle it', `witness error = ${settleAsWitness2.error}`);
+  const resAuthYc2 = await authenticate(CREW_EMAIL, 'pass1234');
+  ok(resAuthYc2.ok, `re-auth crew (stranger settle attempt) failed: ${resAuthYc2.error}`);
+  const settleAsStranger = await resolvePromise(mayaEntry.id, 'let_go');
+  ok(!settleAsStranger.ok, 'stranger settle must fail');
+  ok(settleAsStranger.error === 'only the person who made this promise can settle it', `stranger error = ${settleAsStranger.error}`);
+  const resAuthYm2 = await authenticate(MAYA_EMAIL, 'pass1234');
+  ok(resAuthYm2.ok, `re-auth maya (maker settle) failed: ${resAuthYm2.error}`);
+  const settleMaya = await resolvePromise(mayaEntry.id, 'let_go');
+  ok(settleMaya.ok, `maya settle failed: ${settleMaya.error}`);
+  const mayaLedger2 = await fetchLedger();
+  ok(mayaLedger2.find((e) => e.id === mayaEntry.id)?.state === 'let_go', 'maya entry should now be LET GO');
+
+  // --- (e) STRANGER-WITNESS BACKSTOP: a client writing a stranger id into
+  // its own miss_witness_id can never mint an entry visible to that stranger.
+  // Jules' note is set; tamper her witness to zoe (not a group member); record
+  // must RAISE the re-pick error and create NOTHING; a re-record after the
+  // witness is restored to a real co-member succeeds, and no zoe-visible entry
+  // ever existed.
+  const resAuthYj3 = await authenticate(JULES_EMAIL, 'pass1234');
+  ok(resAuthYj3.ok, `re-auth jules (backstop) failed: ${resAuthYj3.error}`);
+  const julesNoteSet = await setMissNote('an intro run', MAYA_ID);
+  ok(julesNoteSet.ok, `jules setMissNote failed: ${julesNoteSet.error}`);
+  await devMock.saveMissWitness(JULES_ID, userZoe.id); // client tampering
+  const W4 = '2026-09-21T00:00:00.000Z';
+  const tampered = await recordMissedPromise(W4);
+  ok(!tampered.ok && tampered.created === false, 'tampered-witness record must fail closed');
+  ok(tampered.error === 're-pick who your promise is to', `tampered error = ${tampered.error}`);
+  const julesLedgerNoLeak = await fetchLedger();
+  ok(julesLedgerNoLeak.every((e) => e.witnessId !== userZoe.id), 'no entry may ever become visible to zoe');
+  // Restore a real witness → the same week now records fine (recovery works).
+  await devMock.saveMissWitness(JULES_ID, MAYA_ID);
+  const recJules = await recordMissedPromise(W4);
+  ok(recJules.ok && recJules.created === true, `jules re-record after restore failed: ${JSON.stringify(recJules)}`);
+
+  console.log(`        3-person: pick honored/required/self+stranger rejected; crew→maya vs crew→jules isolated both ways; maker-only everywhere; stranger-witness backstop fail-closed`);
+});
+
+await step('z. Ledger schema guard (static): promise_entries has RLS + ONE select pair policy, ZERO write policies; exact §4 copy strings; A member fallback never crashes', async () => {
+  // --- (f) RLS = select-pair ONLY. Read schema.sql and assert there is no
+  // INSERT/UPDATE/DELETE policy on promise_entries — direct client writes are
+  // impossible by construction (real mode would return RLS-denied).
+  const fsMod2 = await import('fs');
+  const schemaSrc = fsMod2.readFileSync(path.join(__dirname, '..', 'supabase', 'schema.sql'), 'utf8');
+  const policyLines = schemaSrc.split('\n').filter((l) => /create policy "promise_entries/.test(l));
+  ok(policyLines.length === 1, `promise_entries policies = ${policyLines.length} (expected exactly 1)`);
+  // The create-policy statement spans lines; assert the select form via regex.
+  ok(
+    /create policy "promise_entries_select_pair" on public\.promise_entries\s+for select using/.test(schemaSrc),
+    'promise_entries policy must be the SELECT pair column one',
+  );
+  ok(!schemaSrc.includes('create policy "promise_entries_insert'), 'no INSERT policy may exist on promise_entries');
+  ok(!schemaSrc.includes('create policy "promise_entries_update'), 'no UPDATE policy may exist on promise_entries');
+  ok(!schemaSrc.includes('create policy "promise_entries_delete'), 'no DELETE policy may exist on promise_entries');
+  ok(schemaSrc.includes('alter table public.promise_entries enable row level security;'), 'promise_entries RLS must be enabled');
+  ok(schemaSrc.includes('add constraint miss_witness_not_self'), 'miss_witness_not_self check must exist');
+  ok(schemaSrc.includes('on delete set null'), 'miss_witness_id FK must be ON DELETE SET NULL');
+  ok(schemaSrc.includes("grant execute on function public.set_miss_note(text, uuid) to authenticated;"), 'set_miss_note must be authenticated-only');
+  ok(!schemaSrc.includes('grant execute on function public.set_miss_note(text, uuid) to anon'), 'set_miss_note must NEVER grant anon');
+  ok(schemaSrc.includes("grant execute on function public.record_missed_promise(timestamptz) to authenticated;"), 'record_missed_promise must be authenticated-only');
+  ok(schemaSrc.includes("grant execute on function public.resolve_promise(uuid, text) to authenticated;"), 'resolve_promise must be authenticated-only');
+
+  // --- §4 verbatim copy: the framing line (curly apostrophe) + screen title.
+  ok(
+    LEDGER_FRAMING_LINE === 'Promises, not payments — SPOTTER doesn\u2019t collect money or enforce anything.',
+    `framing line mismatch: ${LEDGER_FRAMING_LINE}`,
+  );
+  ok(PROMISES_SCREEN_TITLE === 'Promises', `screen title mismatch: ${PROMISES_SCREEN_TITLE}`);
+
+  // --- (a/#5 fallback) "A member" name fallback never crashes: a residual row
+  // whose witness is no longer in any member map renders the fallback name.
+  // The probe is read as the row's MAKER, so re-auth as A first.
+  const resAuthZa = await authenticate(A_EMAIL, 'pass1234');
+  ok(resAuthZa.ok, `re-auth A (fallback probe) failed: ${resAuthZa.error}`);
+  const rawRows = await devMock.listPromiseEntries();
+  const orphan = rawRows.find((r) => r.user_id === userA.id && r.witness_id === 'someone-who-left');
+  // Raw-store injection is a harness-only probe of the fallback render path:
+  // fetchLedger must resolve the name to 'A member' instead of crashing.
+  if (orphan) {
+    const probe = await fetchLedger();
+    const row = probe.find((e) => e.id === orphan.id);
+    ok(row && row.witnessName === 'A member', `witness fallback = ${row?.witnessName} (expected 'A member')`);
+  } else {
+    // Mint one synthetic orphan row through the raw store (harness-only; the
+    // app lib has no such write path — RLS/RPC-only in real mode).
+    const nowIso = new Date().toISOString();
+    const synthetic = {
+      id: 'prom_probe_fallback',
+      membership_id: `${DEV_PAIR_GROUP_ID}:${userA.id}`,
+      user_id: userA.id,
+      witness_id: 'someone-who-left',
+      promise_text: 'a fallback probe',
+      week_start: '2026-08-24T00:00:00.000Z',
+      state: 'open',
+      created_at: nowIso,
+      updated_at: nowIso,
+    };
+    await devMock.savePromiseEntries([...rawRows, synthetic]);
+    const probe = await fetchLedger();
+    const row = probe.find((e) => e.id === synthetic.id);
+    ok(row, 'synthetic orphan row should be fetched by its maker');
+    ok(row && row.witnessName === 'A member', `witness fallback = ${row?.witnessName} (expected 'A member')`);
+    ok(row && row.makerName !== 'A member', 'maker name should still resolve (self)');
+  }
+  // Cleanup: drop the synthetic probe row so later assertions (badges) stay exact.
+  const afterProbe = (await devMock.listPromiseEntries()).filter((r) => r.id !== 'prom_probe_fallback');
+  await devMock.savePromiseEntries(afterProbe);
+
+  console.log(`        schema guard: 1 select-pair policy, 0 write policies; framing line + title verbatim; fallback safe`);
 });
 
 console.log('');

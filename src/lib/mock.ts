@@ -216,6 +216,146 @@ export const devMock = {
       await AsyncStorage.removeItem(`${STORE_PREFIX}missPromise:${userId}`);
     }
   },
+  /**
+   * Treats/Promises ledger: the note is "to" this witness (the dev mirror of
+   * memberships.miss_witness_id; null = not chosen yet).
+   */
+  async getMissWitnessId(userId: string): Promise<string | null> {
+    return readValue<string>(`missWitness:${userId}`);
+  },
+  async saveMissWitness(userId: string, witnessId: string | null): Promise<void> {
+    if (witnessId) {
+      await writeValue(`missWitness:${userId}`, witnessId);
+    } else {
+      await AsyncStorage.removeItem(`${STORE_PREFIX}missWitness:${userId}`);
+    }
+  },
+  /**
+   * Treats/Promises ledger note-set write path — the dev mirror of the REAL
+   * `set_miss_note` RPC (same validation/raise semantics, and the error
+   * strings VERBATIM from the RPC raises so dev/real behave identically):
+   *   - trim + <=80 (over-length -> 'keep it under 80 characters');
+   *   - empty -> clears BOTH the note and the witness, returns ok;
+   *   - exactly 2 members -> the witness AUTO-RESOLVES to the other member
+   *     (any passed witnessId is ignored);
+   *   - 3+ members -> the witnessId must be a current co-member != self
+   *     (else 'choose who this promise is to');
+   *   - solo -> 'pair up with someone first' — the ledger entry point is
+   *     hidden for solo users anyway.
+   */
+  async saveMissNote(
+    userId: string,
+    text: string,
+    witnessId: string | null,
+  ): Promise<{ ok: boolean; error?: string; witnessId?: string | null }> {
+    const trimmed = text.trim();
+    if (trimmed.length > 80) {
+      return { ok: false, error: 'keep it under 80 characters' };
+    }
+    if (!trimmed) {
+      await this.saveMissPromise(userId, '');
+      await this.saveMissWitness(userId, null);
+      return { ok: true, witnessId: null };
+    }
+    const shared = await this.findSharedDevGroup(userId);
+    if (!shared) {
+      return { ok: false, error: 'pair up with someone first' };
+    }
+    let witness: string;
+    if (shared.members.length <= 2) {
+      // Exactly 2 members -> the other member (auto-resolve; ignore input).
+      witness = shared.member_ids[0];
+    } else {
+      if (!witnessId || witnessId === userId || !shared.member_ids.includes(witnessId)) {
+        return { ok: false, error: 'choose who this promise is to' };
+      }
+      witness = witnessId;
+    }
+    await this.saveMissPromise(userId, trimmed);
+    await this.saveMissWitness(userId, witness);
+    return { ok: true, witnessId: witness };
+  },
+  // ---- Treats/Promises ledger store (pair-private, dev mirror of the REAL
+  //      promise_entries table + record_missed_promise / resolve_promise RPCs).
+
+  /** RAW store accessor — harness/parity hook ONLY; the app lib never calls it. */
+  async listPromiseEntries(): Promise<DevPromiseEntry[]> {
+    return (await readValue<DevPromiseEntry[]>('promiseEntries')) ?? [];
+  },
+  async savePromiseEntries(rows: DevPromiseEntry[]): Promise<void> {
+    await writeValue('promiseEntries', rows);
+  },
+  /** Pair-scoped ledger read (mirror of the RLS pair-column select policy): a
+   * user sees ONLY rows where they are the maker OR the witness. */
+  async listLedgerFor(userId: string): Promise<DevPromiseEntry[]> {
+    const rows = await this.listPromiseEntries();
+    return rows
+      .filter((r) => r.user_id === userId || r.witness_id === userId)
+      .sort((a, b) => (a.week_start < b.week_start ? 1 : a.week_start > b.week_start ? -1 : 0));
+  },
+  /**
+   * Dev mirror of the REAL record_missed_promise RPC:
+   *   - solo / no shared group -> {ok, created:false} (silent, never shaming);
+   *   - no note set -> {ok, created:false};
+   *   - witness unset OR stale (no longer a co-member) OR a stranger ->
+   *     THROWS 're-pick who your promise is to' and creates NOTHING;
+   *   - unique (membership_id, week_start) -> second call for the same week
+   *     is a no-op ({ok, created:false}).
+   */
+  async recordMissedPromise(userId: string, weekStart: string): Promise<{ ok: true; created: boolean }> {
+    const shared = await this.findSharedDevGroup(userId);
+    if (!shared) return { ok: true, created: false };
+    const note = await this.getMissPromise(userId);
+    const witness = await this.getMissWitnessId(userId);
+    if (!note || !witness) return { ok: true, created: false };
+    // Re-validate the witness is a CURRENT co-member != self (security-definer
+    // read in real mode; this closes the stranger-witness leak vector).
+    if (witness === userId || !shared.member_ids.includes(witness)) {
+      throw new Error('re-pick who your promise is to');
+    }
+    const rows = await this.listPromiseEntries();
+    const membershipId = `${shared.group_id}:${userId}`;
+    if (rows.some((r) => r.membership_id === membershipId && r.week_start === weekStart)) {
+      return { ok: true, created: false };
+    }
+    const nowIso = new Date().toISOString();
+    rows.push({
+      id: `prom_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+      membership_id: membershipId,
+      user_id: userId,
+      witness_id: witness,
+      promise_text: note,
+      week_start: weekStart,
+      state: 'open',
+      created_at: nowIso,
+      updated_at: nowIso,
+    });
+    await this.savePromiseEntries(rows);
+    return { ok: true, created: true };
+  },
+  /**
+   * Dev mirror of the REAL resolve_promise RPC — promise-MAKER ONLY (the
+   * witness gets NO resolve tap; a witness calling on the maker's entry throws
+   * the maker-only error). Only open -> kept / let_go; anything else throws.
+   */
+  async resolvePromise(userId: string, entryId: string, state: 'kept' | 'let_go'): Promise<{ ok: true }> {
+    const rows = await this.listPromiseEntries();
+    const entry = rows.find((r) => r.id === entryId);
+    // Non-existent id is indistinguishable from someone else's entry (privacy).
+    if (!entry || entry.user_id !== userId) {
+      throw new Error('only the person who made this promise can settle it');
+    }
+    if (state !== 'kept' && state !== 'let_go') {
+      throw new Error('invalid settle state');
+    }
+    if (entry.state !== 'open') {
+      throw new Error('already settled');
+    }
+    entry.state = state;
+    entry.updated_at = new Date().toISOString();
+    await this.savePromiseEntries(rows);
+    return { ok: true };
+  },
   // ---- V1.1 BUILD #3 (slice 1): notification preferences + push devices ----
 
   /**
@@ -681,6 +821,14 @@ export const devMock = {
       // (real mode) — leave_group/unpair drops that row, so the dev mirror
       // clears it for every affected user too.
       await this.saveMissPromise(uid, '');
+      // Treats/Promises ledger: the note's "to" witness rides the same row —
+      // cleared with it. Entries the user MADE in this group cascade with
+      // their membership row (real FK: promise_entries.membership_id ON DELETE
+      // CASCADE); entries where they were only the WITNESS stay intact and
+      // selectable (snapshot semantics — assumption 4).
+      await this.saveMissWitness(uid, null);
+      const ledgerRows = await this.listPromiseEntries();
+      await this.savePromiseEntries(ledgerRows.filter((r) => r.membership_id !== `${groupId}:${uid}`));
     };
     if (shared.members.length <= 2) {
       // Dissolve: both members return to solo.
@@ -740,6 +888,26 @@ export interface DevMembership {
   user_id: string;
   weekly_goal: number;
   role: 'member' | 'admin';
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Treats/Promises ledger: dev-mock promise entry (mirrors the REAL
+ * `promise_entries` table — same columns + the pair-column visibility rule:
+ * a row is readable ONLY by user_id (maker) or witness_id (snapshotted
+ * witness), never the whole group). Writes are RPC-only in the real schema;
+ * the dev mock exposes no direct insert path through the lib (the raw
+ * `listPromiseEntries` accessor exists ONLY as a harness/parity check hook).
+ */
+export interface DevPromiseEntry {
+  id: string;
+  membership_id: string;
+  user_id: string;
+  witness_id: string;
+  promise_text: string;
+  week_start: string;
+  state: 'open' | 'kept' | 'let_go';
   created_at: string;
   updated_at: string;
 }

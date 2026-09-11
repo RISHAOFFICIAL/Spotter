@@ -43,6 +43,7 @@ import { CameraView, useCameraPermissions, type CameraCapturedPicture } from 'ex
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { File } from 'expo-file-system';
+import { LEDGER_FRAMING_LINE, STAKES_PREVIEW_PAIR_LINE } from '@/lib/promises';
 
 // RN 0.86 strict-api typing drops `style` from expo-camera's CameraView JSX
 // props; local passthrough keeps the typed props usable (same pattern as
@@ -133,7 +134,7 @@ function PreviewFrame() {
 function StakesLine() {
   return (
     <Text style={[textStyles.caption.style, styles.stakesLine]}>
-      Miss a week and you might owe a coffee — that’s an optional promise members can add in their profile. Friendly words only, never money.
+      {STAKES_PREVIEW_PAIR_LINE} {LEDGER_FRAMING_LINE}
     </Text>
   );
 }

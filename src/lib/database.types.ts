@@ -85,6 +85,13 @@ export interface Database {
            * partner in this build.
            */
           miss_promise: string | null;
+          /**
+           * Treats/Promises ledger: the member's note is "to" this witness.
+           * Null = not chosen yet; the witness auto-resolves to the other
+           * member in a 2-person group and is picked by the maker in 3+.
+           * ON DELETE SET NULL never cascades; own-row RLS only.
+           */
+          miss_witness_id: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -95,6 +102,7 @@ export interface Database {
           weekly_goal: number;
           role?: 'member' | 'admin';
           miss_promise?: string | null;
+          miss_witness_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -105,6 +113,7 @@ export interface Database {
           weekly_goal?: number;
           role?: 'member' | 'admin';
           miss_promise?: string | null;
+          miss_witness_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -118,6 +127,70 @@ export interface Database {
           {
             foreignKeyName: 'memberships_user_id_fkey';
             columns: ['user_id'];
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      /** Treats/Promises ledger — one row per missed-week promise. Pair-private
+       * by RLS: selectable ONLY by the maker (user_id) or the snapshotted
+       * witness (witness_id) — never the whole group. Writes are RPC-only
+       * (record_missed_promise / resolve_promise); no INSERT/UPDATE/DELETE
+       * policies exist. */
+      promise_entries: {
+        Row: {
+          id: string;
+          membership_id: string;
+          /** The promise-MAKER (the member who missed). */
+          user_id: string;
+          /** SNAPSHOT of the witness at miss time — history never rewrites. */
+          witness_id: string;
+          /** The maker's own note, 1–80 chars, trimmed at creation. */
+          promise_text: string;
+          /** The missed week (unique per maker-membership + week). */
+          week_start: string;
+          state: 'open' | 'kept' | 'let_go';
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          membership_id: string;
+          user_id: string;
+          witness_id: string;
+          promise_text: string;
+          week_start: string;
+          state?: 'open' | 'kept' | 'let_go';
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          membership_id?: string;
+          user_id?: string;
+          witness_id?: string;
+          promise_text?: string;
+          week_start?: string;
+          state?: 'open' | 'kept' | 'let_go';
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'promise_entries_membership_id_fkey';
+            columns: ['membership_id'];
+            referencedRelation: 'memberships';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'promise_entries_user_id_fkey';
+            columns: ['user_id'];
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'promise_entries_witness_id_fkey';
+            columns: ['witness_id'];
             referencedRelation: 'users';
             referencedColumns: ['id'];
           },
@@ -431,6 +504,21 @@ export interface Database {
       delete_account: {
         Args: Record<PropertyKey, never>;
         Returns: undefined;
+      };
+      /** Treats/Promises ledger: called at week rollover when the maker missed. Idempotent + never-shaming (no note set -> {ok:true, created:false}); re-validates the witness is a current co-member (stranger-witness backstop). SECURITY DEFINER, authenticated only. */
+      record_missed_promise: {
+        Args: { p_week_start: string };
+        Returns: Json;
+      };
+      /** Treats/Promises ledger: settle an entry — promise-maker ONLY, witness is passive. Only open -> kept / let_go. SECURITY DEFINER, authenticated only. */
+      resolve_promise: {
+        Args: { p_entry_id: string; p_state: string };
+        Returns: Json;
+      };
+      /** Treats/Promises ledger: note-set write path (trim + <=80; empty clears both columns). 2-person group auto-resolves the witness; 3+ requires a co-member pick. SECURITY DEFINER, authenticated only. */
+      set_miss_note: {
+        Args: { p_text: string; p_witness_id: string | null };
+        Returns: Json;
       };
     };
     Enums: Record<string, never>;
