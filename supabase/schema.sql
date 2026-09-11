@@ -112,25 +112,22 @@ create policy "memberships_delete_own" on public.memberships
   for delete using (auth.uid() = user_id);
 
 -- V1.1 BUILD #2 (M slice): pair-scoped READ of a partner's membership row.
--- Mirrors workouts_select_pair (same 2-member-group shape): a user may SELECT
--- the OTHER member's row inside their shared pair group — and nothing else.
+-- Mirrors workouts_select_group (same shape): a user may SELECT the OTHER
+-- member's row inside their shared pair group — and nothing else.
 -- This is what lets the partner MissCard read the partner's miss_promise
 -- (their own note, surfaced only when THEY missed a week) plus their
 -- weekly_goal for the fallback miss computation. Insert/update/delete stay
 -- strictly own-row (memberships_update_own still requires auth.uid() =
 -- user_id), so a partner can never write your promise — only see it via this
 -- read path when the MissCard conditions hold.
+-- S8b FIX: use public.is_paired_with() (SECURITY DEFINER) — the raw memberships
+-- join form hit the RLS-inside-policy-subquery bug family (partner rows
+-- invisible inside the EXISTS), always false in real mode. NOT applied to live
+-- in S8b (outside the apply scope); fixed in source for the Build #2 apply.
 create policy "memberships_select_pair" on public.memberships
   for select using (
     auth.uid() <> user_id
-    and exists (
-      select 1
-      from public.memberships mine
-      join public.memberships theirs on theirs.group_id = mine.group_id
-      where mine.user_id = auth.uid()
-        and theirs.user_id = memberships.user_id
-        and (select count(*) from public.memberships m where m.group_id = mine.group_id) = 2
-    )
+    and public.is_paired_with(memberships.user_id)
   );
 
 -- ---------------------------------------------------------------------------
@@ -918,20 +915,17 @@ create policy "weekly_results_delete_own" on public.weekly_results
 -- Pair-scoped READ: a user may SELECT result rows authored by their single
 -- accepted pair partner, scoped to the SHARED pair group (the recap in
 -- Build #4 reads "You: x of g / Partner: y of g" from these rows). Mirrors
--- workouts_select_pair (same 2-member-group shape); insert/update/delete stay
--- strictly own-row.
+-- workouts_select_group (same shape; 2-member group is the base case).
+-- S8b FIX: the original raw `memberships mine JOIN memberships theirs`
+-- subquery hit the documented RLS-inside-policy-subquery bug family (see the
+-- PAIR-READ HELPERS note above) — memberships RLS filtered the partner's rows
+-- out of the EXISTS, so the pair check was ALWAYS false in real mode.
+-- Use public.is_paired_with() (SECURITY DEFINER) exactly like
+-- workouts_select_group; insert/update/delete stay strictly own-row.
 create policy "weekly_results_select_pair" on public.weekly_results
   for select using (
     auth.uid() <> user_id
-    and exists (
-      select 1
-      from public.memberships mine
-      join public.memberships theirs on theirs.group_id = mine.group_id
-      where mine.user_id = auth.uid()
-        and theirs.user_id = weekly_results.user_id
-        and theirs.group_id = weekly_results.group_id
-        and (select count(*) from public.memberships m where m.group_id = mine.group_id) = 2
-    )
+    and public.is_paired_with(weekly_results.user_id)
   );
 
 -- notification_preferences: per-user push preference switches (Build #3 reads
