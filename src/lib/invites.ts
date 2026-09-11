@@ -3,11 +3,11 @@
  *
  * One interface, two backends (same pattern as workoutStore):
  *  - REAL:  Supabase `invites` table (inviter-scoped RLS) + `get_invite` /
- *           `accept_invite` RPCs (schema.sql). accept_invite REQUIRES auth —
- *           the security decision for slice C: a code alone can never mutate
- *           invite rows; the invitee creates their account first, then accepts
- *           with their own JWT. The code is a capability that can only pair
- *           YOUR account with the inviter.
+ *           `join_group` / `leave_group` RPCs (schema.sql). join_group REQUIRES
+ *           auth — a code alone can never mutate invite rows; the invitee
+ *           creates their account first, then joins with their own JWT. The
+ *           code is a capability that can only seat YOUR account in the
+ *           inviter's group.
  *  - DEV:   devMock AsyncStorage two-user setup (self + "Dev Partner").
  *
  * Token: 8 chars, readable alphabet (no 0/O/1/I/L), no expiry in MVP.
@@ -155,59 +155,105 @@ export interface PendingInviteInfo {
   inviterName: string;
   /** Whether the inviter has logged anything yet (drives Accept-screen copy). */
   inviterHasLogs: boolean;
+  /** Inviter's CURRENT co-member count (0 when solo). Total group size = member_count + 1. */
+  memberCount: number;
+  /** Inviter currently holds a shared-group seat (>= 2 members) — false → "Start a group with {A}" copy. */
+  hasGroup: boolean;
 }
 
 /** Public, unauthenticated lookup of a code for the Accept landing screen. */
 export async function lookupInvite(code: string): Promise<PendingInviteInfo> {
   const normalized = normalizeInviteCode(code);
-  if (!normalized) return { found: false, inviterName: '', inviterHasLogs: false };
+  if (!normalized) return { found: false, inviterName: '', inviterHasLogs: false, memberCount: 0, hasGroup: false };
 
   if (supabase) {
     const { data, error } = await supabase.rpc('get_invite', { p_token: normalized });
     if (!error && data) {
       // get_invite (schema.sql) returns jsonb with SNAKE_CASE keys
-      // (inviter_name, inviter_has_logs) — not the camelCase InviteInfo shape.
+      // (inviter_name, inviter_has_logs, member_count, has_group) — not the
+      // camelCase PendingInviteInfo shape.
       const row = (
         typeof data === 'string' ? (JSON.parse(data) as unknown) : data
-      ) as { found?: boolean; inviter_name?: string | null; inviter_has_logs?: boolean };
+      ) as {
+        found?: boolean;
+        inviter_name?: string | null;
+        inviter_has_logs?: boolean;
+        member_count?: number;
+        has_group?: boolean;
+      };
       if (row?.found) {
         return {
           found: true,
           inviterName: row.inviter_name ?? 'Your partner',
           inviterHasLogs: row.inviter_has_logs ?? false,
+          memberCount: typeof row.member_count === 'number' ? row.member_count : 0,
+          hasGroup: row.has_group ?? false,
         };
       }
     }
-    return { found: false, inviterName: '', inviterHasLogs: false };
+    return { found: false, inviterName: '', inviterHasLogs: false, memberCount: 0, hasGroup: false };
   }
 
   // DEV MOCK — resolve against the dev invites stores (any user's — the code
   // belongs to whoever generated it pre-signup).
   const invite = await devMock.findInviteByCode(code);
   if (!invite || invite.status !== 'pending') {
-    return { found: false, inviterName: '', inviterHasLogs: false };
+    return { found: false, inviterName: '', inviterHasLogs: false, memberCount: 0, hasGroup: false };
   }
   const inviter = await devMock.getUserById(invite.inviter_id);
+  const inviterState = await devMock.getPairState(invite.inviter_id);
   return {
     found: true,
     inviterName: inviter?.email.split('@')[0] ?? 'Dev Partner',
     inviterHasLogs: (await devMock.listWorkouts(invite.inviter_id)).length > 0,
+    memberCount: inviterState.accepted ? 1 : 0,
+    hasGroup: inviterState.accepted,
   };
 }
 
 export interface AcceptInviteResult {
   ok: boolean;
   error?: string;
-  /** Real mode: the new pair group id. */
+  /** Real mode: the shared group id (the inviter's current group, created when they were solo). */
   groupId?: string;
   /** Inviter first name (for the in-app welcome toast). */
   inviterName?: string;
+  /** Real mode: TOTAL seats in the group after this join (co-members + 1). */
+  memberCount?: number;
 }
 
 /**
- * Authenticated accept: pairs the CURRENT user with the inviter of this code.
- * REAL → accept_invite RPC (transactional: creates the pair group + both
- * memberships, flips the invite to accepted). DEV → pair with the demo partner.
+ * Map a `join_group` RPC raise to the user-facing Accept-screen string
+ * (groups-copy-spec §2.5). The backend raises exactly: 'code not found',
+ * 'already accepted', 'you cannot accept your own invite', 'this group is
+ * full', 'you are already in this group'. Anything else → neutral fallback.
+ */
+export function friendlyAcceptError(message: string): string {
+  const m = message.toLowerCase();
+  if (m.includes('code not found')) {
+    return "We couldn't find that code. Double-check it with the person who shared it.";
+  }
+  if (m.includes('already accepted')) {
+    return "That code's no longer valid. Ask for a fresh one.";
+  }
+  if (m.includes('you cannot accept your own invite')) {
+    return "That's your own code — share it, don't accept it.";
+  }
+  if (m.includes('this group is full')) {
+    return "This group's full — 3 people max. Start your own group with your code.";
+  }
+  if (m.includes('you are already in this group')) {
+    return "You're already in this group — no need to join twice.";
+  }
+  return "Couldn't join. Try again.";
+}
+
+/**
+ * Authenticated accept: joins the CURRENT user to the inviter's shared group.
+ * REAL → join_group RPC (transactional: resolves the inviter's current group,
+ * creates it when they are solo, seats the joiner, and keeps the code
+ * reusable — a group code can be used by multiple distinct joiners). DEV →
+ * pair with the demo partner.
  */
 export async function acceptInvite(code: string): Promise<AcceptInviteResult> {
   const session = await getStoredSession();
@@ -230,16 +276,16 @@ export async function acceptInvite(code: string): Promise<AcceptInviteResult> {
     if (inviter && inviter.id !== session.user.id) {
       // Real two-user accept: pair the current user with the inviter.
       await devMock.acceptDevPairWith(session.user.id, inviter);
-      return { ok: true, inviterName: inviter.email.split('@')[0] ?? 'Partner' };
+      return { ok: true, inviterName: inviter.email.split('@')[0] ?? 'Partner', memberCount: 1 };
     }
     // Self-accept keeps the slice-C single-user demo story: pairs with the
     // preset demo partner so the shared feed renders without a real person.
     await devMock.acceptDevPair(session.user.id);
-    return { ok: true, inviterName: 'Dev Partner' };
+    return { ok: true, inviterName: 'Dev Partner', memberCount: 1 };
   }
 
-  const { data, error } = await supabase.rpc('accept_invite', { p_token: normalized });
-  if (error) return { ok: false, error: error.message };
+  const { data, error } = await supabase.rpc('join_group', { p_token: normalized });
+  if (error) return { ok: false, error: friendlyAcceptError(error.message) };
   const parsed = (typeof data === 'string' ? (JSON.parse(data || '{}') as unknown) : data) as Record<
     string,
     string | boolean | number | null | undefined
@@ -248,6 +294,7 @@ export async function acceptInvite(code: string): Promise<AcceptInviteResult> {
     ok: true,
     groupId: typeof parsed?.group_id === 'string' ? parsed.group_id : undefined,
     inviterName: typeof parsed?.inviter_name === 'string' ? parsed.inviter_name : undefined,
+    memberCount: typeof parsed?.member_count === 'number' ? parsed.member_count : undefined,
   };
 }
 
@@ -257,17 +304,19 @@ export interface UnpairResult {
 }
 
 /**
- * UNPAIR (compliance: a user must be able to stop receiving partner UGC).
- * Detaches the CURRENT user from their partner — BOTH sides return to solo.
- * Keeps both users' workout logs (photos stay per-user isolated); the shared
- * pair team name is cleared. Idempotent: an already-solo user just gets ok.
+ * LEAVE GROUP (compliance: a user must be able to stop receiving member UGC).
+ * Removes the CURRENT user's seat from their shared group — on a 2-member
+ * group the group dissolves (both return to solo); on a 3-member group the
+ * group survives and the creator role hands to the oldest remaining member.
+ * Keeps the leaver's own workout logs (photos stay per-user isolated). The
+ * leaver immediately loses visibility of the others' rows/photos (every read
+ * is membership-driven). Idempotent: an already-solo user just gets ok.
  *
- * REAL → `unpair` RPC (schema.sql): SECURITY DEFINER, checks the caller is a
- *   member of their 2-member pair group, then deletes BOTH memberships in one
- *   transaction. No argument = a user can only ever unpair THEMSELVES.
+ * REAL → `leave_group` RPC (schema.sql): SECURITY DEFINER, no argument = a
+ *   user can only ever leave on THEIR OWN behalf.
  * DEV → devMock.unpairDev (same outcome on the local store).
  */
-export async function unpair(): Promise<UnpairResult> {
+export async function leaveGroup(): Promise<UnpairResult> {
   const session = await getStoredSession();
   if (!session) return { ok: false, error: 'Sign in first.' };
 
@@ -276,10 +325,16 @@ export async function unpair(): Promise<UnpairResult> {
     return { ok: true };
   }
 
-  const { error } = await supabase.rpc('unpair');
+  const { error } = await supabase.rpc('leave_group');
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }
+
+/**
+ * @deprecated Single-partner-era name. Kept for the current Profile screen +
+ * dev-mock harness until S4 renames consumers onto `leaveGroup` — same call.
+ */
+export const unpair = leaveGroup;
 
 /** Human message template for the share sheet (invite-flow.md §1, one line). */
 export function inviteMessageTemplate(code: string): string {

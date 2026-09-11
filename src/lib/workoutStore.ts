@@ -17,16 +17,18 @@ import * as Crypto from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
 
 import { devMock, type WorkoutRow, type DevMembership, DEV_PAIR_GROUP_ID } from './mock';
-import { getPetName } from './naming';
+import { getPetNames } from './naming';
 import { getStoredSession, supabase } from './supabase';
 import { createSignedUrls } from './storage';
 import { WEEK_START_DAYS } from './settings';
 import {
   weekStartFor,
+  parseMyGroup,
   WORKOUT_BUCKET,
   type WorkoutLog,
   type WeeklyContext,
   type PartnerInfo,
+  type GroupMemberInfo,
   type WorkoutType,
   type DevPhoto,
 } from './workouts';
@@ -112,7 +114,6 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
   // Defaults match onboarding presets (goal 3, week starts Mon).
   let weeklyGoal = 3;
   let weekStartDay = 'Mon';
-  let partner: PartnerInfo | null = null;
   const userName = session.user.email.split('@')[0] ?? 'You';
 
   if (session.isDevMode) {
@@ -154,24 +155,35 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
 
   if (session.isDevMode || !supabase) {
     // ---- DEV MOCK — same shape from async storage + local files (slice C:
-    // two-user: own logs count for the ring; partner logs merge into the feed).
+    // two-user: own logs count for the ring; co-member logs merge into the feed).
     const pair = await devMock.getPairState(session.user.id);
-    partner = pair.partner
-      ? {
-          id: pair.partner.id,
-          firstName: (pair.partner.name ?? 'Partner').split(' ')[0],
-          hasLogs: (await devMock.listWorkouts(pair.partner.id)).length > 0,
-        }
-      : null;
-
-    // Naming feature: pet name (local-only) + shared team name (dev pair group).
-    const petName = await getPetName();
-    const teamName = await devMock.getTeamName();
-    const partnerDisplayName = partner ? (petName || partner.firstName) : null;
-
     const rows = await devMock.listWorkouts(session.user.id);
-    const partnerRows = partner ? await devMock.listWorkouts(partner.id) : [];
-    const allRows = [...rows, ...partnerRows];
+    const memberRows = pair.partner ? await devMock.listWorkouts(pair.partner.id) : [];
+    const allRows = [...rows, ...memberRows];
+
+    // Naming feature: per-member pet names (local-only map) + shared team name
+    // (dev pair group). Display name = local pet name when set, else the
+    // member's real first name — the same rule real mode applies.
+    const petNames = await getPetNames();
+    const teamName = await devMock.getTeamName();
+    const members: GroupMemberInfo[] = pair.partner
+      ? [
+          {
+            id: pair.partner.id,
+            firstName: (pair.partner.name ?? 'Partner').split(' ')[0],
+            displayName:
+              petNames[pair.partner.id]?.trim() || (pair.partner.name ?? 'Partner').split(' ')[0],
+            hasLogs: memberRows.length > 0,
+          },
+        ]
+      : [];
+    const partner: PartnerInfo | null = members[0] ?? null;
+    const partnerDisplayName = members[0]?.displayName ?? null;
+    const authorName = (userId: string): string =>
+      userId === session.user.id
+        ? userName
+        : (members.find((m) => m.id === userId)?.displayName ?? 'Member');
+
     const inWeek = (r: WorkoutRow) => {
       const t = new Date(r.logged_at);
       return !Number.isNaN(t.getTime()) && t >= weekStart && t < weekEnd;
@@ -182,7 +194,7 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
         rowToLog(
           r,
           r.photo_path, // DEV: photo_path is a local file URI — display directly
-          r.user_id === session.user.id ? userName : (partnerDisplayName ?? 'Partner'),
+          authorName(r.user_id),
         ),
       )
       .sort((a, b) => (a.loggedAt < b.loggedAt ? 1 : -1));
@@ -192,7 +204,8 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
         weeklyGoal,
         weekStartDay,
         logs,
-        hasPartner: !!partner,
+        hasPartner: members.length > 0,
+        members,
         partner,
         partnerDisplayName,
         teamName,
@@ -202,88 +215,86 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
     };
   }
 
-  // REAL mode — rings count OWN logs only; the feed shows own + partner's.
-  // Photo isolation: own rows via `workouts` RLS; partner rows ONLY through
-  // the pair-scoped read policy (schema.sql `workouts_select_pair` — a single
-  // accepted partner, additive to own-row RLS, never relaxing the bucket).
-  const { data: ownRows, error: ownError } = await supabase
+  // REAL mode — rings count OWN logs only; the feed shows own + co-members'.
+  // Photo isolation: every row resolves through RLS — own rows via the own
+  // policies, co-member rows ONLY through the group-scoped read policies
+  // (schema.sql workouts_select_group / users_select_group / groups_select_member
+  // — membership-driven, additive to own-row RLS, never relaxing the bucket).
+  // Discovery runs through the SECURITY DEFINER my_group() RPC — the app
+  // cannot read co-members' membership rows directly (memberships RLS exposes
+  // only own rows, which made raw-memberships counting see every group as
+  // 1-member). my_group() resolves only auth.uid()'s own shared group, so
+  // stranger isolation is unchanged. ONE IN-query per table (no N+1 per
+  // member): the group-select policies evaluate per row.
+  const { data: groupData, error: groupError } = await supabase.rpc('my_group');
+  if (groupError) return { ok: false, error: groupError.message };
+  const group = parseMyGroup(groupData);
+  const memberIds = group.member_ids;
+  const allUserIds = [session.user.id, ...memberIds];
+
+  const { data: rows, error: rowsError } = await supabase
     .from('workouts')
     .select('id, user_id, photo_path, logged_at, workout_type, created_at')
-    .eq('user_id', session.user.id)
+    .in('user_id', allUserIds)
     .order('logged_at', { ascending: false });
-  if (ownError) return { ok: false, error: ownError.message };
+  if (rowsError) return { ok: false, error: rowsError.message };
 
-  // My accepted partner: the OTHER member of my pair group. Discovery runs
-  // through the SECURITY DEFINER my_pair() RPC — the app cannot read the
-  // partner's membership row directly (memberships RLS exposes only own rows,
-  // which made the old raw-memberships counting see every group as 1-member
-  // and silently produce no partner in real mode). my_pair() resolves only
-  // auth.uid()'s own 2-member pair group, so stranger isolation is unchanged.
-  const { data: pairData, error: pairError } = await supabase.rpc('my_pair');
-  if (pairError) return { ok: false, error: pairError.message };
-  const pair =
-    ((typeof pairData === 'string' ? (JSON.parse(pairData || '{}') as unknown) : pairData) as unknown) as {
-      partner_id?: string | null;
-      pair_group_id?: string | null;
-    } | null;
-  const partnerId: string | null = pair?.partner_id ?? null;
-  const pairGroupId: string | null = pair?.pair_group_id ?? null;
-  let partnerName = 'Partner';
+  // Co-member names are group-scoped via `users_select_group` (real first
+  // names; pet names stay strictly local).
+  const { data: userRows, error: usersError } = await supabase
+    .from('users')
+    .select('id, name')
+    .in('id', allUserIds);
+  if (usersError) return { ok: false, error: usersError.message };
+
+  const realNameById = new Map((userRows ?? []).map((u) => [u.id, u.name ?? '']));
+  const petNames = await getPetNames();
+  const members: GroupMemberInfo[] = memberIds.map((id) => {
+    const firstName = (realNameById.get(id) ?? 'Member').split(' ')[0];
+    return {
+      id,
+      firstName,
+      displayName: petNames[id]?.trim() || firstName,
+      hasLogs: (rows ?? []).some((r) => r.user_id === id),
+    };
+  });
+  const partner: PartnerInfo | null = members[0] ?? null;
+  const partnerDisplayName = members[0]?.displayName ?? null;
+
+  // Naming feature: read the group's optional team_name (group-scoped
+  // `groups_select_member` policy — any member can read; creator still writes).
   let teamName: string | null = null;
-  if (partnerId) {
-    // Partner name read is pair-scoped via the `users_select_pair` policy.
-    const { data: partnerUser } = await supabase
-      .from('users')
-      .select('name')
-      .eq('id', partnerId)
-      .maybeSingle();
-    if (partnerUser?.name) partnerName = partnerUser.name.split(' ')[0];
-  }
-  // Naming feature: read the pair group's optional team_name (pair-scoped
-  // `groups_select_pair` policy — both members can read; creator still writes).
-  if (pairGroupId) {
+  if (group.group_id) {
     const { data: groupRow } = await supabase
       .from('groups')
       .select('team_name')
-      .eq('id', pairGroupId)
+      .eq('id', group.group_id)
       .maybeSingle();
     teamName = groupRow?.team_name?.trim() || null;
   }
-  partner = partnerId ? { id: partnerId, firstName: partnerName, hasLogs: true } : null;
-  // Pet name is LOCAL-ONLY (never synced): this user's private display name
-  // for their partner, otherwise the partner's real first name.
-  const petName = await getPetName();
-  const partnerDisplayName = partner ? (petName || partnerName) : null;
 
-  // Partner rows are visible through the pair-scope policy; fetch the last
-  // 50 (the whole partner journal is out of MVP scope — feed = weekly context).
-  const { data: partnerRows, error: partnerError } = partnerId
-    ? await supabase
-        .from('workouts')
-        .select('id, user_id, photo_path, logged_at, workout_type, created_at')
-        .eq('user_id', partnerId)
-        .order('logged_at', { ascending: false })
-        .limit(50)
-    : ({ data: null, error: null } as const);
-  if (partnerError) return { ok: false, error: partnerError.message };
+  const memberAuthorById = new Map(members.map((m) => [m.id, m.displayName]));
+  const authorName = (userId: string): string =>
+    userId === session.user.id ? userName : (memberAuthorById.get(userId) ?? 'Member');
 
   const inWeek = (r: { logged_at: string }) => {
     const t = new Date(r.logged_at);
     return !Number.isNaN(t.getTime()) && t >= weekStart && t < weekEnd;
   };
-  const weekRows = [...(ownRows ?? []), ...(partnerRows ?? [])].filter(inWeek);
+  const weekRows = (rows ?? []).filter(inWeek);
   const signed = await createSignedUrls(weekRows.map((r) => r.photo_path));
 
-  const ownWeek = (ownRows ?? []).filter(inWeek);
+  const ownWeek = (rows ?? []).filter((r) => r.user_id === session.user.id && inWeek(r));
   return {
     ok: true,
     context: {
       weeklyGoal,
       weekStartDay,
       logs: weekRows
-        .map((r) => rowToLog(r, signed.get(r.photo_path) ?? '', r.user_id === session.user.id ? userName : (partnerDisplayName ?? partnerName)))
+        .map((r) => rowToLog(r, signed.get(r.photo_path) ?? '', authorName(r.user_id)))
         .sort((a, b) => (a.loggedAt < b.loggedAt ? 1 : -1)),
-      hasPartner: !!partner,
+      hasPartner: members.length > 0,
+      members,
       partner,
       partnerDisplayName,
       teamName,
