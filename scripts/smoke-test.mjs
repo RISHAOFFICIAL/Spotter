@@ -67,7 +67,7 @@ const model = {
 const { devMock, DEV_PAIR_GROUP_ID } = model.mock;
 const { authenticate, getStoredSession } = model.supabase;
 const { fetchWeeklyContext, logWorkout } = model.workoutStore;
-const { getOrCreateInviteCode, lookupInvite, acceptInvite, unpair } = model.invites;
+const { getOrCreateInviteCode, lookupInvite, acceptInvite, leaveGroup } = model.invites;
 const { commitOnboarding } = model.settings;
 const { setPetName, getPetName, setTeamName } = model.naming;
 
@@ -179,24 +179,24 @@ await step('g. Ring counts A OWN logs only (not B)', async () => {
   console.log(`        own=${own} total=${total} → A ring 1/4`);
 });
 
-await step('h. Solo-mode invite banner state flips to paired after accept', async () => {
+await step('h. Solo-mode invite banner state flips to in-group after accept', async () => {
   const ctx = await fetchWeeklyContext();
-  ok(ctx.context.hasPartner === true, 'hasPartner still false');
-  ok(ctx.context.partner?.id === userB.id, `partner = ${ctx.context.partner?.id}`);
-  // home-screen.md §3: the banner renders only when hasPartner === false, so
+  ok(ctx.context.members.length === 1, `members.length=${ctx.context.members.length} (expected 1)`);
+  ok(ctx.context.members[0]?.id === userB.id, `members[0] = ${ctx.context.members[0]?.id}`);
+  // home-screen.md §3: the banner renders only when members.length === 0, so
   // the context flip is exactly what unmounts the banner.
-  console.log(`        hasPartner=true, partner=${ctx.context.partner?.firstName}`);
+  console.log(`        inGroup=true, member=${ctx.context.members[0]?.displayName}`);
 });
 
-await step('i. Naming: pet name overrides partner label locally; team name shared on pair group', async () => {
-  // Session is A (re-authed in step g). A's partner is B (bri.smoke).
+await step('i. Naming: pet name overrides member label locally; team name shared on pair group', async () => {
+  // Session is A (re-authed in step g). A's group = just A + B (bri.smoke).
   // A) Pet name (local-only): what A calls B, shown to A only.
   await setPetName('Coach');
   ok((await getPetName()) === 'Coach', 'pet name did not persist');
 
   let ctx = await fetchWeeklyContext();
-  ok(ctx.context.partnerDisplayName === 'Coach', `partnerDisplayName=${ctx.context.partnerDisplayName} (expected Coach)`);
-  ok(ctx.context.partner?.firstName === 'bri.smoke', 'partner.firstName must stay the REAL name');
+  ok(ctx.context.members[0]?.displayName === 'Coach', `member displayName=${ctx.context.members[0]?.displayName} (expected Coach)`);
+  ok(ctx.context.members[0]?.firstName === 'bri.smoke', 'member.firstName must stay the REAL name');
   // Partner (B) feed-card author label uses the pet name; own (A) keeps own name.
   const bLog = ctx.context.logs.find((l) => l.userId === userB.id);
   const aLog = ctx.context.logs.find((l) => l.userId === userA.id);
@@ -210,17 +210,17 @@ await step('i. Naming: pet name overrides partner label locally; team name share
   ctx = await fetchWeeklyContext();
   ok(ctx.context.teamName === 'Team Us', `teamName=${ctx.context.teamName} (expected Team Us)`);
 
-  // Fallback: clearing the pet name returns partner label to the real name.
+  // Fallback: clearing the pet name returns the member label to the real name.
   await setPetName('');
   ctx = await fetchWeeklyContext();
-  ok(ctx.context.partnerDisplayName === 'bri.smoke', `cleared pet name → ${ctx.context.partnerDisplayName} (expected bri.smoke)`);
+  ok(ctx.context.members[0]?.displayName === 'bri.smoke', `cleared pet name → ${ctx.context.members[0]?.displayName} (expected bri.smoke)`);
   ok(ctx.context.teamName === 'Team Us', 'team name should persist after clearing pet name');
 
   // Local-only isolation: B does NOT see A's pet name, but DOES see the team name.
   const resB = await authenticate(B_EMAIL, 'pass5678');
   ok(resB.ok, `re-auth B failed: ${resB.error}`);
   const ctxB = await fetchWeeklyContext();
-  ok(ctxB.context.partnerDisplayName === 'alex.smoke', `B partnerDisplayName=${ctxB.context.partnerDisplayName} (expected alex.smoke — no pet name set for B)`);
+  ok(ctxB.context.members[0]?.displayName === 'alex.smoke', `B member displayName=${ctxB.context.members[0]?.displayName} (expected alex.smoke — no pet name set for B)`);
   ok(ctxB.context.teamName === 'Team Us', `B teamName=${ctxB.context.teamName} (expected shared Team Us)`);
 
   // Restore session A + clear the team name so a re-run starts clean.
@@ -229,28 +229,27 @@ await step('i. Naming: pet name overrides partner label locally; team name share
   console.log(`        pet name "Coach" → local override; team "Team Us" → shared header`);
 });
 
-await step('j. Unpair: both sides return to solo, own logs intact, re-pair works with a fresh code', async () => {
-  // Session is A (restored at the end of step i). A and B are paired; A has
+await step('j. Leave group: both sides return to solo, own logs intact, re-pair works with a fresh code', async () => {
+  // Session is A (restored at the end of step i). A and B are in a group; A has
   // its own log (step c), B has its own (step f). Clear A's local pet-name
-  // override so the solo→pair→unpair assertions read real names only.
+  // override so the solo→group→leave assertions read real names only.
   await setPetName('');
 
-  // Confirm A still sees the pair before unpairing (sanity baseline).
+  // Confirm A still sees the pair before leaving (sanity baseline).
   let ctx = await fetchWeeklyContext();
-  ok(ctx.context.hasPartner === true, 'A should be paired before unpair');
+  ok(ctx.context.members.length === 1, 'A should be in a group before leave');
   const aLogsBefore = await devMock.listWorkouts(userA.id);
   const bLogsBefore = await devMock.listWorkouts(userB.id);
-  ok(aLogsBefore.length === 1, `A logs before unpair = ${aLogsBefore.length} (expected 1)`);
-  ok(bLogsBefore.length === 1, `B logs before unpair = ${bLogsBefore.length} (expected 1)`);
+  ok(aLogsBefore.length === 1, `A logs before leave = ${aLogsBefore.length} (expected 1)`);
+  ok(bLogsBefore.length === 1, `B logs before leave = ${bLogsBefore.length} (expected 1)`);
 
-  // Unpair as A.
-  const res = await unpair();
-  ok(res.ok, `unpair failed: ${res.error}`);
+  // Leave as A.
+  const res = await leaveGroup();
+  ok(res.ok, `leaveGroup failed: ${res.error}`);
 
-  // A is solo: hasPartner=false, no pair memberships, partner state reset.
+  // A is solo: members empty, no pair memberships, member state reset.
   ctx = await fetchWeeklyContext();
-  ok(ctx.context.hasPartner === false, 'A hasPartner should be false after unpair');
-  ok(ctx.context.partner === null, 'A partner should be null after unpair');
+  ok(ctx.context.members.length === 0, `A members.length=${ctx.context.members.length} (expected 0 after leave)`);
   const memA = await devMock.getDevMemberships(userA.id);
   ok(!memA.some((m) => m.group_id === DEV_PAIR_GROUP_ID), 'A pair membership not removed');
 
@@ -261,13 +260,13 @@ await step('j. Unpair: both sides return to solo, own logs intact, re-pair works
   ok(stateB.accepted === false && stateB.partner === null, 'B pair state not reset to solo');
 
   // Own workout logs survive (photos stay per-user isolated); team name cleared.
-  ok((await devMock.listWorkouts(userA.id)).length === 1, 'A logs lost after unpair');
-  ok((await devMock.listWorkouts(userB.id)).length === 1, 'B logs lost after unpair');
-  ok((await devMock.getTeamName()) === null, 'shared team name should clear on unpair');
+  ok((await devMock.listWorkouts(userA.id)).length === 1, 'A logs lost after leave');
+  ok((await devMock.listWorkouts(userB.id)).length === 1, 'B logs lost after leave');
+  ok((await devMock.getTeamName()) === null, 'shared team name should clear on leave');
 
-  // Idempotent: unpairing again when already solo is a harmless no-op.
-  const res2 = await unpair();
-  ok(res2.ok, `second unpair should be a no-op ok: ${res2.error}`);
+  // Idempotent: leaving again when already solo is a harmless no-op.
+  const res2 = await leaveGroup();
+  ok(res2.ok, `second leave should be a no-op ok: ${res2.error}`);
 
   // Re-pair with a FRESH code: clear the persisted invite ref so A generates a
   // new token, then B accepts A's new code.
@@ -287,10 +286,10 @@ await step('j. Unpair: both sides return to solo, own logs intact, re-pair works
   const resAuthA3 = await authenticate(A_EMAIL, 'pass1234');
   ok(resAuthA3.ok, `re-auth A (post-pair) failed: ${resAuthA3.error}`);
   const ctxA = await fetchWeeklyContext();
-  ok(ctxA.context.hasPartner === true, 'A should be re-paired after fresh accept');
-  ok(ctxA.context.partner?.id === userB.id, `A partner after re-pair = ${ctxA.context.partner?.id}`);
+  ok(ctxA.context.members.length === 1, 'A should be back in a group after fresh accept');
+  ok(ctxA.context.members[0]?.id === userB.id, `A member after re-pair = ${ctxA.context.members[0]?.id}`);
 
-  console.log(`        A+B unpair → both solo, logs kept, fresh-code re-pair works`);
+  console.log(`        A+B leave → both solo, logs kept, fresh-code re-pair works`);
 });
 
 console.log('');

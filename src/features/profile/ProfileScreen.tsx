@@ -20,9 +20,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/features/auth/AuthProvider';
 import { AppButton, TextButton } from '@/components/AppButton';
 import { deleteAccount } from '@/lib/accountDeletion';
-import { unpair } from '@/lib/invites';
-import { getPetName, setPetName, setTeamName } from '@/lib/naming';
+import { leaveGroup } from '@/lib/invites';
+import { getPetNames, setPetNameFor, setTeamName } from '@/lib/naming';
 import { fetchWeeklyContext } from '@/lib/workoutStore';
+import type { GroupMemberInfo } from '@/lib/workouts';
 import { colors, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
 
@@ -38,38 +39,39 @@ export function ProfileScreen() {
   const email = session?.user.email ?? profile?.email ?? '';
   const name = profile?.name ?? email.split('@')[0] ?? '';
 
-  // Naming feature (lead brief): optional local pet name (what I call MY
-  // partner, shown to me only) + optional shared pair team name. Both fall
-  // back to current behavior when empty.
-  const [partnerFirstName, setPartnerFirstName] = useState<string | null>(null);
-  const [petName, setPetNameValue] = useState('');
+  // Group section (groups-copy-spec §4): per-member local pet names (what I
+  // call each co-member — shown to me only) + the optional shared group team
+  // name. All fall back to current behavior when unset.
+  const [members, setMembers] = useState<GroupMemberInfo[]>([]);
+  const [petNames, setPetNames] = useState<Record<string, string>>({});
   const [teamNameValue, setTeamNameValue] = useState('');
   const [namingBusy, setNamingBusy] = useState(false);
 
-  // Unpair (compliance: stop receiving partner UGC). Two-tap confirm: the
+  // Leave group (compliance: stop receiving member UGC). Two-tap confirm: the
   // first tap flips the label to "Tap again to confirm" for 3s; a second tap
-  // inside that window runs unpair(). No new screens.
-  const [confirmUnpair, setConfirmUnpair] = useState(false);
-  const [unpairBusy, setUnpairBusy] = useState(false);
+  // inside that window runs leaveGroup(). No new screens.
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const [leaveBusy, setLeaveBusy] = useState(false);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadNaming = async () => {
-    const [ctx, pet] = await Promise.all([fetchWeeklyContext(), getPetName()]);
-    setPartnerFirstName(ctx.ok && ctx.context?.hasPartner ? (ctx.context.partner?.firstName ?? null) : null);
-    setTeamNameValue(ctx.ok ? (ctx.context?.teamName ?? '') : '');
-    setPetNameValue(pet ?? '');
+    const [ctx, petMap] = await Promise.all([fetchWeeklyContext(), getPetNames()]);
+    if (!ctx.ok || !ctx.context) return;
+    setMembers(ctx.context.members);
+    setTeamNameValue(ctx.context.teamName ?? '');
+    setPetNames(petMap);
   };
 
   useEffect(() => {
     let mounted = true;
     (async () => {
-      const [ctx, pet] = await Promise.all([fetchWeeklyContext(), getPetName()]);
+      const [ctx, petMap] = await Promise.all([fetchWeeklyContext(), getPetNames()]);
       if (!mounted) return;
-      if (ctx.ok && ctx.context?.hasPartner) {
-        setPartnerFirstName(ctx.context.partner?.firstName ?? null);
+      if (ctx.ok && ctx.context) {
+        setMembers(ctx.context.members);
         setTeamNameValue(ctx.context.teamName ?? '');
       }
-      setPetNameValue(pet ?? '');
+      setPetNames(petMap);
     })();
     return () => {
       mounted = false;
@@ -77,43 +79,49 @@ export function ProfileScreen() {
     };
   }, []);
 
+  const handlePetNameChange = (memberId: string, value: string) => {
+    setPetNames((prev) => ({ ...prev, [memberId]: value }));
+  };
+
   const saveNaming = async () => {
     if (namingBusy) return;
     setNamingBusy(true);
     setMessage(null);
-    await setPetName(petName);
+    for (const m of members) {
+      await setPetNameFor(m.id, petNames[m.id] ?? '');
+    }
     const teamRes = await setTeamName(teamNameValue);
     setNamingBusy(false);
     setMessage(teamRes.ok ? 'Saved.' : (teamRes.error ?? 'Saved.'));
   };
 
   // Two-tap confirm: first tap arms the confirm for 3s, second tap executes.
-  const handleUnpairTap = () => {
-    if (unpairBusy) return;
-    if (!confirmUnpair) {
-      setConfirmUnpair(true);
+  const handleLeaveTap = () => {
+    if (leaveBusy) return;
+    if (!confirmLeave) {
+      setConfirmLeave(true);
       if (confirmTimer.current) clearTimeout(confirmTimer.current);
-      confirmTimer.current = setTimeout(() => setConfirmUnpair(false), 3000);
+      confirmTimer.current = setTimeout(() => setConfirmLeave(false), 3000);
       return;
     }
     if (confirmTimer.current) clearTimeout(confirmTimer.current);
-    setConfirmUnpair(false);
-    void runUnpair();
+    setConfirmLeave(false);
+    void runLeave();
   };
 
-  const runUnpair = async () => {
-    if (unpairBusy) return;
-    setUnpairBusy(true);
+  const runLeave = async () => {
+    if (leaveBusy) return;
+    setLeaveBusy(true);
     setMessage(null);
-    const res = await unpair();
-    setUnpairBusy(false);
+    const res = await leaveGroup();
+    setLeaveBusy(false);
     if (res.ok) {
-      setMessage('Unpaired. You can pair again anytime with a new code.');
-      // Return to the solo state in place: reload partner/team fields so the
+      setMessage('You left the group. You can join or start another anytime.');
+      // Return to the solo state in place: reload member/team fields so the
       // invite banner path + solo copy take over on the next Home fetch.
       await loadNaming();
     } else {
-      setMessage(res.error ?? "Couldn't unpair. Try again.");
+      setMessage(res.error ?? 'Couldn\u2019t leave the group. Try again.');
     }
   };
 
@@ -163,28 +171,32 @@ export function ProfileScreen() {
           </Text>
         </View>
 
-        {/* Naming (optional) — pet name is local-only; team name is shared.
-            Both fields render only when paired (a team name lives on the pair
-            group, and a pet name needs a partner to rename). */}
-        <Text style={[textStyles.label.style, { color: colors.text.muted.hex, marginTop: spacing.xxxl }]}>NAMES (OPTIONAL)</Text>
+        {/* Group (groups-copy-spec §4) — section header "GROUP" matches "ACCOUNT"; the
+            card lists one pet-name row per co-member + the shared team name.
+            Member rows render only when in a group (members.length > 0). */}
+        <Text style={[textStyles.label.style, { color: colors.text.muted.hex, marginTop: spacing.xxxl }]}>GROUP</Text>
         <View style={styles.card}>
-          {partnerFirstName ? (
+          {members.length > 0 ? (
             <>
-              <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
-                Nickname for {partnerFirstName} (optional)
-              </Text>
-              <TextInput
-                value={petName}
-                onChangeText={setPetNameValue}
-                placeholder="e.g. Coach"
-                placeholderTextColor={colors.text.muted.hex}
-                autoCapitalize="words"
-                style={styles.input}
-                accessibilityLabel={`Nickname for ${partnerFirstName}`}
-              />
-              <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
-                Just for you — only you see this name.
-              </Text>
+              {members.map((m) => (
+                <View key={m.id}>
+                  <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+                    Nickname for {m.firstName} (optional)
+                  </Text>
+                  <TextInput
+                    value={petNames[m.id] ?? ''}
+                    onChangeText={(v) => handlePetNameChange(m.id, v)}
+                    placeholder="e.g. Coach"
+                    placeholderTextColor={colors.text.muted.hex}
+                    autoCapitalize="words"
+                    style={styles.input}
+                    accessibilityLabel={`Nickname for ${m.firstName}`}
+                  />
+                  <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+                    Just for you — only you see this name.
+                  </Text>
+                </View>
+              ))}
 
               <Text style={[textStyles.caption.style, { color: colors.text.muted.hex, marginTop: spacing.lg }]}>
                 Team name (optional)
@@ -199,28 +211,32 @@ export function ProfileScreen() {
                 accessibilityLabel="Team name"
               />
               <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
-                Shown in your feed header for you and your partner.
+                Shown in the feed header for everyone in the group.
               </Text>
 
               <AppButton label="Save" onPress={() => void saveNaming()} loading={namingBusy} style={{ marginTop: spacing.lg }} />
 
-              {/* Unpair — low-emphasis destructive-adjacent row at the bottom of
-                  the partner card. Two-tap confirm; neutral, recoverable copy. */}
+              {/* Leave group — low-emphasis destructive-adjacent row at the
+                  bottom of the group card. Two-tap confirm; neutral, recoverable
+                  copy (groups-copy-spec §4). */}
               <View style={styles.unpairRow}>
                 <TextButton
-                  label={confirmUnpair ? 'Tap again to confirm' : `Unpair from ${partnerFirstName ?? 'your partner'}`}
-                  onPress={handleUnpairTap}
+                  label={confirmLeave ? 'Tap again to confirm' : 'Leave group'}
+                  onPress={handleLeaveTap}
                   color={colors.text.muted.hex}
                 />
-                {unpairBusy && <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>…</Text>}
+                {leaveBusy && <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>…</Text>}
               </View>
               <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
-                Stops sharing your photos with each other. You can pair again anytime with a new code.
+                Stops sharing photos with this group. You can join or start another anytime.
+              </Text>
+              <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+                Your group can have up to 3 people — you and 2 more.
               </Text>
             </>
           ) : (
             <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
-              Pair up with a partner to add a nickname or team name.
+              Start a group to add nicknames or a team name.
             </Text>
           )}
         </View>
@@ -241,7 +257,7 @@ export function ProfileScreen() {
             <Text style={[textStyles.bodyStrong.style, { color: colors.text.danger.hex }]}>Delete account</Text>
           </Pressable>
           <Text style={[textStyles.caption.style, { color: colors.text.muted.hex, marginTop: spacing.xs }]}>
-            Permanently deletes your account, photo logs and photos. Your partner keeps theirs.
+            Permanently deletes your account, photo logs and photos. Your group keeps theirs.
           </Text>
         </View>
 

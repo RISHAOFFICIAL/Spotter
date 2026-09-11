@@ -40,30 +40,13 @@ import { textStyles } from '@/theme/typography';
 import { useAuth } from '@/features/auth/AuthProvider';
 import {
   acceptInvite,
+  friendlyAcceptError,
   lookupInvite,
   normalizeInviteCode,
   type PendingInviteInfo,
 } from '@/lib/invites';
 
 type Stage = 'enter' | 'found';
-
-/** Map accept-stage failures to distinct, friendly messages (area 1b). The
- * public `get_invite` lookup only reports found/not-found, so "already used"
- * and "own code" can only surface here at accept time — map what the API can
- * distinguish and fall back to one clear retry message otherwise. */
-function friendlyAcceptError(msg: string): string {
-  const m = msg.toLowerCase();
-  if (m.includes('own invite') || m.includes('your own')) {
-    return "That's your own code — share it, don't accept it.";
-  }
-  if (m.includes('already accepted') || m.includes('already been used')) {
-    return "That code's already been used. Ask your partner for a fresh one.";
-  }
-  if (m.includes('not found') || m.includes("couldn't find") || m.includes("isn't a valid")) {
-    return "We couldn't find that code. Double-check it with your partner.";
-  }
-  return msg;
-}
 
 export function EnterCodeScreen() {
   const router = useRouter();
@@ -83,7 +66,7 @@ export function EnterCodeScreen() {
       setError(
         normalized
           ? "That code looks too short — it's 8 characters."
-          : 'Enter the 8-character code from your partner — we\u2019ll look them up.',
+          : 'Enter the 8-character code — we\u2019ll look it up.',
       );
       return;
     }
@@ -94,7 +77,7 @@ export function EnterCodeScreen() {
     setBusy(false);
     if (!res.found) {
       setStage('enter');
-      setError('We couldn\u2019t find that code. Double-check it with your partner.');
+      setError('We couldn\u2019t find that code. Double-check it with the person who shared it.');
       return;
     }
     setInfo(res);
@@ -111,20 +94,19 @@ export function EnterCodeScreen() {
     const res = await acceptInvite(lastCode.current);
     if (!res.ok) {
       setBusy(false);
-      setError(friendlyAcceptError(res.error ?? 'Couldn\u2019t accept. Try again.'));
+      setError(friendlyAcceptError(res.error ?? 'Couldn\u2019t join. Try again.'));
       return;
     }
     await refresh();
     setBusy(false);
     // In-app welcome toast is wired on Home (params.toast) — push is out of
-    // MVP scope (invite-flow §5). Pass it through the route when it exists.
+    // MVP scope (invite-flow §5). One string, both states (copy-spec §2.6).
     // Typed route literal (router.d.ts): '/(home)/(tabs)' is the collapsed
     // index under the (home) group — '/(home)' alone is not in the href union.
-    router.replace(
-      res.inviterName
-        ? { pathname: '/(home)/(tabs)', params: { toast: `You're in. ${res.inviterName}'s logs are live in your feed.` } }
-        : '/(home)/(tabs)',
-    );
+    router.replace({
+      pathname: '/(home)/(tabs)',
+      params: { toast: 'You\u2019re in. Your group\u2019s logs are live in your feed.' },
+    });
   };
 
   // Pending auth handled here (inline single-path auth, same as Welcome):
@@ -162,9 +144,9 @@ export function EnterCodeScreen() {
 
         {stage === 'enter' && (
           <>
-            <Text style={[textStyles.display.style, styles.headline]}>Join your partner</Text>
+            <Text style={[textStyles.display.style, styles.headline]}>Join a group</Text>
             <Text style={[textStyles.body.style, styles.subhead]}>
-              Enter the invite code they shared. You\u2019ll see each other\u2019s photo-proof logs after you accept.
+              Enter the code they shared. You\u2019ll see each other\u2019s photo-proof logs after you join.
             </Text>
             <TextInput
               value={code}
@@ -183,26 +165,33 @@ export function EnterCodeScreen() {
             {error && <Text style={[textStyles.caption.style, { color: colors.text.danger.hex, textAlign: 'center' }]}>{error}</Text>}
             <AppButton label="Look up code" onPress={() => void resolve(code)} disabled={normalizeInviteCode(code).length < 8} loading={busy} />
             <View style={styles.soloRow}>
-              <TextButton label="Just look around — I\u2019ll pair later" onPress={() => router.replace('/(home)/(tabs)')} color={colors.text.muted.hex} />
+              <TextButton label="Just look around — I\u2019ll join later" onPress={() => router.replace('/(home)/(tabs)')} color={colors.text.muted.hex} />
             </View>
           </>
         )}
 
         {stage === 'found' && info && (
           <>
+            {/* Context line (copy-spec §2.2): four variants from has_group ×
+                inviter_has_logs — carries the emotional hook. */}
             <Text style={[textStyles.caption.style, styles.context]}>
-              {info.inviterName ? `${info.inviterName} invited you to work out together` : 'Your partner invited you to work out together'}
+              {info.hasGroup
+                ? `${info.inviterName} invited you to their group — ${info.inviterHasLogs ? 'they\u2019re already logging.' : 'they\u2019re waiting for you.'}`
+                : `${info.inviterName} invited you to ${info.inviterHasLogs ? 'start a group' : 'work out together'} — ${info.inviterHasLogs ? 'they\u2019re already logging.' : 'they\u2019re waiting for you.'}`}
             </Text>
+            {/* Headline (copy-spec §2.3 STAR Option 1): N = member_count + 1. */}
             <Text style={[textStyles.display.style, styles.headline]}>
-              {info.inviterHasLogs ? "They're already logging. Your turn." : "They're waiting for you."}
+              {info.hasGroup
+                ? `Join ${info.inviterName}\u2019s group — ${info.memberCount + 1} people in it`
+                : `Start a group with ${info.inviterName}`}
             </Text>
             <Text style={[textStyles.body.style, styles.subhead]}>
-              Accept and you\u2019ll see each other\u2019s photo-proof logs. Your weekly ring counts only your workouts — theirs counts only theirs.
+              Everyone in the group sees each other\u2019s photo-proof logs. Your weekly ring counts only your workouts — theirs counts only theirs.
             </Text>
             <View style={styles.privacyRow}>
               <Text style={{ fontSize: 14, color: colors.brand.primary.hex }}>✓</Text>
               <Text style={[textStyles.caption.style, styles.privacy]}>
-                Photos stay sealed per person — even partners only see each other\u2019s, never anyone else\u2019s.
+                Photos stay sealed per person — group members see each other\u2019s, never anyone else\u2019s.
               </Text>
             </View>
 
@@ -232,14 +221,19 @@ export function EnterCodeScreen() {
                   accessibilityLabel="Password"
                 />
                 <AppButton
-                  label="Accept & create account"
+                  label={info.hasGroup ? 'Join & create account' : 'Start a group & create account'}
                   onPress={() => void ensureAccountThenAccept()}
                   disabled={!authEmail || !authPassword || busy}
                   loading={busy}
                 />
               </KeyboardAvoidingView>
             ) : (
-              <AppButton label="Accept" onPress={() => void accept()} disabled={busy} loading={busy} />
+              <AppButton
+                label={info.hasGroup ? `Join ${info.inviterName}\u2019s group` : `Start a group with ${info.inviterName}`}
+                onPress={() => void accept()}
+                disabled={busy}
+                loading={busy}
+              />
             )}
 
             {error && <Text style={[textStyles.caption.style, { color: colors.text.danger.hex, textAlign: 'center' }]}>{error}</Text>}

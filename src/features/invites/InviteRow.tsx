@@ -26,9 +26,9 @@ import {
   type InviteInfo,
 } from '@/lib/invites';
 
-/** Exact copy per compliance-copy-spec.md §1 (verbatim; code, not link). */
-export const INVITE_ROW_LABEL = 'Send your gym partner the invite code';
-export const INVITE_ROW_MICROCOPY = 'They open SPOTTER, enter this 8-character code, and you\u2019re paired.';
+/** Exact copy per groups-copy-spec §5 (verbatim; code, not link; group term). */
+export const INVITE_ROW_LABEL = 'Send your group the invite code';
+export const INVITE_ROW_MICROCOPY = 'They open SPOTTER, enter this 8-character code, and you\u2019re in a group together.';
 export const INVITE_SENT_LINE = 'Code shared. They\u2019ll show up in your feed when they accept.';
 
 export function InviteRow() {
