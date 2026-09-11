@@ -395,17 +395,19 @@ export const devMock = {
 
     // Workout history: you 2, Maya 1, Jules 0 — all < 24h old so every seeded
     // log is inside the current week for any week-start day (ring/feed states
-    // are distinguishable from the first render).
-    const seededLog = (id: string, uid: string, photo: string, offsetMs: number, workoutType: string | null) => {
+    // are distinguishable from the first render). Rows carry the dual-capture
+    // shape (selfie + environment + caption) so the new feed card renders its
+    // two-thumb layout from the very first render.
+    const seededLog = (id: string, uid: string, photo: string, offsetMs: number, workoutType: string | null, caption: string | null = null) => {
       const t = iso(offsetMs);
-      return { id, user_id: uid, group_id: DEV_DEMO_GROUP_ID, photo_path: photo, logged_at: t, workout_type: workoutType, created_at: t };
+      return { id, user_id: uid, group_id: DEV_DEMO_GROUP_ID, photo_path: photo, photo_env: photo.replace('.jpg', '-env.jpg'), caption, logged_at: t, workout_type: workoutType, created_at: t };
     };
     await this.saveWorkouts(userId, [
-      seededLog('dev_demo_self_w1', userId, 'mock://dev/run.jpg', 2 * 3600_000, 'Run'),
+      seededLog('dev_demo_self_w1', userId, 'mock://dev/run.jpg', 2 * 3600_000, 'Run', 'Mile repeats done'),
       seededLog('dev_demo_self_w2', userId, 'mock://dev/lift.jpg', 20 * 3600_000, 'Lift'),
     ]);
     await this.saveWorkouts(memberB.id, [
-      seededLog('dev_demo_maya_w1', memberB.id, 'mock://dev/maya-cycle.jpg', 5 * 3600_000, 'Cycle'),
+      seededLog('dev_demo_maya_w1', memberB.id, 'mock://dev/maya-cycle.jpg', 5 * 3600_000, 'Cycle', 'Leg day \u2014 Ouch'),
     ]);
 
     // Shared team name + the creating user's local pet names for both members
@@ -456,6 +458,8 @@ export const devMock = {
           id: `dev_partner_w1`,
           user_id: partner.id,
           photo_path: 'mock://partner/run.jpg',
+          photo_env: 'mock://partner/run-env.jpg',
+          caption: 'Lungs felt great today',
           logged_at: new Date(now - 5400_000).toISOString(),
           workout_type: 'Run',
           created_at: new Date(now - 5400_000).toISOString(),
@@ -464,6 +468,8 @@ export const devMock = {
           id: `dev_partner_w2`,
           user_id: partner.id,
           photo_path: 'mock://partner/lift.jpg',
+          photo_env: 'mock://partner/lift-env.jpg',
+          caption: null,
           logged_at: new Date(now - 72 * 3600_000).toISOString(),
           workout_type: 'Lift',
           created_at: new Date(now - 72 * 3600_000).toISOString(),
@@ -578,7 +584,13 @@ export interface WorkoutRow {
   /** Pair group id (mirrors the real workouts.group_id column; dev mock sets
    * DEV_PAIR_GROUP_ID so the row shape matches the real table). */
   group_id?: string | null;
+  /** Selfie proof path (local file in dev, storage path in real). */
   photo_path: string;
+  /** Environment-shot path (v1.0 dual-capture, always UNFILTERED). Null on
+   * legacy/seed rows that predate dual-capture — mirrors real photo_env. */
+  photo_env?: string | null;
+  /** Optional caption (≤140 chars, product cap) — mirrors real caption. */
+  caption?: string | null;
   logged_at: string;
   workout_type: string | null;
   created_at: string;

@@ -1,11 +1,22 @@
 /**
  * Workout-logging types + helpers shared by REAL mode (Supabase) and DEV MOCK.
  *
- * Trust rule (non-negotiable): `photoPath` is ALWAYS the Storage object path
- * (e.g. `${user_id}/${workout_id}.jpg`) inside the PRIVATE `workouts` bucket —
- * never a public URL, never a signed URL persisted anywhere. Signed URLs are
+ * Trust rule (non-negotiable): `photoPath` / `photoEnv` are ALWAYS Storage
+ * object paths (e.g. `${user_id}/${workout_id}.jpg` and
+ * `${user_id}/${workout_id}-env.jpg`) inside the PRIVATE `workouts` bucket —
+ * never public URLs, never signed URLs persisted anywhere. Signed URLs are
  * generated on demand by `createSignedUrl` (src/lib/storage.ts) and are
  * short-lived.
+ *
+ * Dual-capture (v1.0, onboarding-copy-addendum-2026-09-11.md §2): every log has
+ * TWO live shots — a selfie (`photoPath`, the pre-existing field, optionally
+ * tonally graded via src/lib/filters.ts) and an UNFILTERED environment shot
+ * (`photoEnv`, NEW). Field naming: DB columns are snake_case (`photo_env`,
+ * `caption`); the UI/log shape uses camelCase (`photoEnv`, `photoEnvUri`,
+ * `caption`) mirroring the existing `photoPath` ↔ `photo_path` pairing. <140
+ * char caption cap — enforced in LogSheet (maxLength) AND by the schema check
+ * constraint; legacy rows (pre-dual-capture) have photo_env NULL / caption NULL
+ * and render single-thumb.
  *
  * Week calculations use the user's `week_start_day` and local time. The ring
  * numeral + camera count badge + feed come from ONE weekly-context query
@@ -21,15 +32,22 @@ export interface WorkoutLog {
   id: string;
   /** Author's user id (own or partner's) — the feed shows the name. */
   userId: string;
-  /** Storage path inside the private bucket; NEVER a URL. */
+  /** Selfie Storage path inside the private bucket; NEVER a URL. */
   photoPath: string;
+  /** Environment-shot Storage path (the 2nd live shot, always unfiltered);
+   * empty string when a legacy row predates dual-capture. NEVER a URL. */
+  photoEnv: string;
   /** ISO timestamp — server default now() in REAL mode. */
   loggedAt: string;
   workoutType: string | null;
+  /** Optional caption (≤140 chars, product cap) — null when none. */
+  caption: string | null;
   /** Author display name (own name in solo MVP). */
   authorName: string;
   /** Absolute URI this session can display (signed URL in REAL mode, local file in DEV MOCK). */
   photoUri: string;
+  /** Absolute URI for the environment shot — '' when the legacy row has none. */
+  photoEnvUri: string;
 }
 
 /** One co-member of the user's shared group (excludes self). */

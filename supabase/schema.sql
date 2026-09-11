@@ -122,15 +122,25 @@ create policy "memberships_delete_own" on public.memberships
 -- ---------------------------------------------------------------------------
 
 -- workouts: one row per logged workout (photo proof path + optional type).
+-- v1.0 dual-capture (onboarding-copy-addendum-2026-09-11.md §2): every log has
+-- TWO live shots — a selfie (photo_path, optionally tonally graded on-device
+-- and BAKED at capture) and an UNFILTERED environment shot (photo_env) — plus
+-- an optional caption (≤140 chars). Additive: legacy rows have photo_env NULL /
+-- caption NULL and render single-thumb. Both objects live under the SAME
+-- `${user_id}/` storage prefix, so the per-user storage policies below are
+-- unchanged — photo isolation keeps its existing guarantees.
 create table if not exists public.workouts (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users (id) on delete cascade,
   group_id uuid references public.groups (id) on delete set null,
   photo_path text not null,
+  photo_env text,
+  caption text,
   logged_at timestamptz not null default now(),
   workout_type text,
   created_at timestamptz not null default now(),
-  check (workout_type is null or length(workout_type) between 1 and 40)
+  check (workout_type is null or length(workout_type) between 1 and 40),
+  check (caption is null or length(caption) between 1 and 140)
 );
 
 alter table public.workouts enable row level security;
