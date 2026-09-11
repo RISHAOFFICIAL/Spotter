@@ -22,7 +22,7 @@ import { LogSheet } from '@/features/logging/LogSheet';
 import { BottomBar } from '@/features/home/BottomBar';
 import { WeeklyRing } from '@/features/home/WeeklyRing';
 import { FeedCard } from '@/features/home/FeedCard';
-import { EmptyState, InviteBanner, type EmptyCase } from '@/features/home/EmptyState';
+import { EmptyState, InviteBanner, listNames, type EmptyCase } from '@/features/home/EmptyState';
 import { InviteSheet } from '@/features/invites/InviteSheet';
 import { colors, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
@@ -95,34 +95,32 @@ export default function HomeScreen() {
   }, [load]);
 
   const weekCount = ctx?.logs.filter((l) => l.userId === session?.user.id).length ?? 0;
-  const hasPartner = ctx?.hasPartner ?? false;
-  // Naming feature: this user's preferred partner name (local pet name, else
-  // the partner's real first name) + the optional shared team name.
-  const partnerFirstName = ctx?.partner?.firstName;
-  const partnerDisplayName = ctx?.partnerDisplayName ?? partnerFirstName;
+  // Groups (copy-spec §1): in a group ⇔ members.length > 0; member display
+  // names (local pet name, else real first name) drive the ring label, the
+  // status line and the feed header ("With {A}" / "With {A} and {B}").
+  const memberNames = ctx?.members.map((m) => m.displayName) ?? [];
+  const inGroup = memberNames.length > 0;
   const teamName = ctx?.teamName ?? null;
-  const emptyVariant: EmptyCase = hasPartner ? 'noLogsPartner' : 'noLogsNoPartner';
+  const emptyVariant: EmptyCase = inGroup ? 'noLogsGroup' : 'noLogsNoPartner';
 
-  // Ring center label (batch A §6): paired shows the "just you & {name}"
-  // pattern; solo keeps the plain canonical label. Goal-reached (and still
-  // winnable) flips the center label to "WEEK COMPLETE" in the ring itself.
-  const ringLabel =
-    hasPartner && partnerDisplayName
-      ? `DAYS THIS WEEK — just you & ${partnerDisplayName}`
-      : undefined;
+  // Ring center label (copy-spec §1.3, STAR Option 1): 2-person keeps the
+  // "just you & {A}" intimacy; 3-person becomes "you & {A} and {B}". Goal
+  // reached (still winnable) flips the center label to "WEEK COMPLETE" in-ring.
+  const ringLabel = inGroup
+    ? memberNames.length === 1
+      ? `DAYS THIS WEEK — just you & ${memberNames[0]}`
+      : `DAYS THIS WEEK — you & ${listNames(memberNames)}`
+    : undefined;
   const weekComplete = !!ctx && !ctx.weekEndedUnmet && weekCount >= ctx.weeklyGoal;
 
-  // Status line under the ring (home-screen.md §2; rings are PERSONAL).
-  // Compliance brief #2 (spec §3): the paired branches use "your ring" wording;
-  // branch on hasPartner && partnerFirstName for the 0-logs and partial cases
-  // before the generic branches. Goal-met and week-over-unmet stay generic.
-  const paired = hasPartner && !!partnerFirstName;
+  // Status line under the ring (home-screen.md §2; copy-spec §1.4 STAR Option A
+  // — names keep "your ring" voice; rings stay PERSONAL).
   const statusLine = (() => {
     if (ctx && ctx.weekEndedUnmet) {
       return { text: `${ctx.weeklyGoal} missed. The ring's honest — next week.`, color: colors.text.danger.hex, strong: true };
     }
     if (weekCount === 0) {
-      if (paired) {
+      if (inGroup) {
         return { text: ctx ? `0 of ${ctx.weeklyGoal}. Your ring — one tap when you're done.` : '', color: colors.text.secondary.hex, strong: false };
       }
       return { text: ctx ? `0 of ${ctx.weeklyGoal} this week. One tap when you're done.` : '', color: colors.text.secondary.hex, strong: false };
@@ -130,9 +128,13 @@ export default function HomeScreen() {
     if (ctx && weekCount >= ctx.weeklyGoal) {
       return { text: `${ctx.weeklyGoal} of ${ctx.weeklyGoal} — week complete. Solid.`, color: colors.status.success.hex, strong: true };
     }
-    if (paired) {
+    if (inGroup) {
       return {
-        text: ctx ? `${weekCount} of ${ctx.weeklyGoal} — your ring, ${partnerDisplayName ?? partnerFirstName} fills theirs.` : '',
+        text: ctx
+          ? memberNames.length === 1
+            ? `${weekCount} of ${ctx.weeklyGoal} — your ring, ${memberNames[0]} fills theirs.`
+            : `${weekCount} of ${ctx.weeklyGoal} — your ring, ${listNames(memberNames)} fill theirs.`
+          : '',
         color: colors.text.secondary.hex,
         strong: false,
       };
@@ -191,14 +193,14 @@ export default function HomeScreen() {
           </Text>
         )}
 
-        {/* Partner presence (slice C): banner while solo; join-code affordance; disappears when paired. */}
-        {!hasPartner && !bannerDismissed && (
+        {/* Group presence (copy-spec §1.1): banner while solo; join-code affordance; gone when in a group. */}
+        {!inGroup && !bannerDismissed && (
           <InviteBanner
             onInvite={() => setInviteOpen(true)}
             onDismiss={() => setBannerDismissed(true)}
           />
         )}
-        {!hasPartner && bannerDismissed && (
+        {!inGroup && bannerDismissed && (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Join with a code"
@@ -207,26 +209,26 @@ export default function HomeScreen() {
             hitSlop={8}
           >
             <Text style={[textStyles.captionStrong.style, { color: colors.text.muted.hex }]}>
-              Have a code from your partner? Enter it here
+              Have a code? Enter it here
             </Text>
           </Pressable>
         )}
 
         {/* Feed */}
         {ctx && ctx.logs.length === 0 && (
-          <EmptyState variant={emptyVariant} partnerName={partnerDisplayName ?? partnerFirstName} />
+          <EmptyState variant={emptyVariant} memberNames={memberNames} />
         )}
         {ctx && ctx.logs.length > 0 && (
           <>
             <View style={styles.feedHeaderRow}>
               <Text style={[textStyles.label.style, styles.feedHeader]}>RECENT</Text>
-              {hasPartner && partnerFirstName ? (
+              {inGroup ? (
                 <Text
                   style={[textStyles.label.style, { color: colors.text.muted.hex }, styles.feedHeaderName]}
                   numberOfLines={1}
                   ellipsizeMode="tail"
                 >
-                  {teamName ? teamName : `Paired with ${partnerDisplayName ?? partnerFirstName}`}
+                  {teamName ? teamName : `With ${listNames(memberNames)}`}
                 </Text>
               ) : null}
             </View>
@@ -234,8 +236,8 @@ export default function HomeScreen() {
               {ctx.logs.map((log) => (
                 <FeedCard key={log.id} log={log} now={now} />
               ))}
-              {hasPartner && partnerFirstName && ctx.logs.every((l) => l.userId === session?.user.id) && (
-                <EmptyState variant="partnerNoLogs" partnerName={partnerDisplayName ?? partnerFirstName} />
+              {inGroup && ctx.logs.every((l) => l.userId === session?.user.id) && (
+                <EmptyState variant="memberNoLogs" memberNames={memberNames} />
               )}
             </View>
           </>
@@ -251,7 +253,7 @@ export default function HomeScreen() {
       {/* Bottom bar — pinned; camera is the fixed primary action. Home is already the active screen, so the Home slot is a no-op. */}
       <BottomBar onHome={() => {}} onCamera={() => setLogOpen(true)} weekCount={weekCount} />
 
-      <LogSheet visible={logOpen} onClose={() => setLogOpen(false)} onLogged={handleLogged} partnerName={partnerDisplayName ?? partnerFirstName} />
+      <LogSheet visible={logOpen} onClose={() => setLogOpen(false)} onLogged={handleLogged} partnerName={memberNames[0]} />
       <InviteSheet visible={inviteOpen} onClose={() => setInviteOpen(false)} />
 
       {/* In-app welcome toast after accepting (one-time; push is out of MVP scope). */}

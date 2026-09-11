@@ -330,12 +330,6 @@ export async function leaveGroup(): Promise<UnpairResult> {
   return { ok: true };
 }
 
-/**
- * @deprecated Single-partner-era name. Kept for the current Profile screen +
- * dev-mock harness until S4 renames consumers onto `leaveGroup` — same call.
- */
-export const unpair = leaveGroup;
-
 /** Human message template for the share sheet (invite-flow.md §1, one line). */
 export function inviteMessageTemplate(code: string): string {
   const part = code ? ` Code: ${code}` : '';

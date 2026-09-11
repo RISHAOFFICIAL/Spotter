@@ -53,7 +53,8 @@ type Stage = 'camera' | 'confirm' | 'saving' | 'done';
 interface Props {
   visible: boolean;
   onClose: () => void;
-  /** Accepted partner's first name (null while solo) — drives the privacy line. */
+  /** First co-member's display name (undefined while solo) — drives the
+   * done-state "Shared with {name}" confirmation line. */
   partnerName?: string;
   /** Called with the logged workout — Home prepends it optimistically. */
   onLogged: (log: WorkoutLog) => void;
@@ -178,10 +179,10 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
             <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
               <View style={styles.privacyLine}>
                 <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex, textAlign: 'center' }]}>
-                  {partnerName ? `Only ${partnerName} will see this.` : 'Only your partner will see this.'}
+                  Only your group will see this.
                 </Text>
                 <Text style={[textStyles.label.style, { color: colors.text.muted.hex, textAlign: 'center', marginTop: spacing.xs }]}>
-                  Your photos are sealed to your account — only you and your partner can ever see them.
+                  Your photos are sealed to your account — only you and your group can ever see them.
                 </Text>
               </View>
               <View style={styles.previewRow}>

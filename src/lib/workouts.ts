@@ -46,40 +46,17 @@ export interface GroupMemberInfo {
   hasLogs: boolean;
 }
 
-/** Single-partner-era compat view of a member (kept for the existing UI +
- * dev-mock harness; S4 renames consumers to `members`). */
-export interface PartnerInfo {
-  id: string;
-  /** Partner's REAL first name (never the pet name) — used for the Profile
-   * "Nickname for {firstName}" label. */
-  firstName: string;
-  /** True when the partner has logged at least one workout (feed card). */
-  hasLogs: boolean;
-}
-
 export interface WeeklyContext {
   weeklyGoal: number;
   weekStartDay: string;
   /** Logs this week, newest first (drives the ring fill + badge + feed). */
   logs: WorkoutLog[];
-  /** true when the user belongs to a shared group (>= 1 co-member). */
-  hasPartner: boolean;
   /**
    * Co-members (excludes self), ordered by membership created_at asc
    * (`my_group`'s member_ids order). Empty when solo. The group feed is
-   * exactly own logs + every member's logs.
+   * exactly own logs + every member's logs. "In a group" ⇔ members.length > 0.
    */
   members: GroupMemberInfo[];
-  /**
-   * @deprecated Single-partner alias of `members[0]` (null when solo).
-   * Kept for the current Home/Profile reads + dev-mock harness until S4
-   * renames the rendered consumers onto `members`.
-   */
-  partner: PartnerInfo | null;
-  /**
-   * @deprecated Alias of `members[0]?.displayName` (null when solo).
-   */
-  partnerDisplayName: string | null;
   /**
    * Optional shared group team name (e.g. "Team Us"). Null when unset OR solo.
    * When set, the feed header shows this instead of "With {names}".

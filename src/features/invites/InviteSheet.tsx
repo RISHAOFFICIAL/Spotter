@@ -66,16 +66,19 @@ export function InviteSheet({ visible, onClose }: { visible: boolean; onClose: (
           <Ionicons name="close" size={22} color={colors.text.secondary.hex} />
         </Pressable>
         <Text style={[textStyles.headline.style, styles.headline]}>
-          Bring your gym partner in
+          Bring your crew in
         </Text>
         <Text style={[textStyles.caption.style, styles.body]}>
-          They enter your 8-character code, download the app, and your names pair up. Free — for both of you.
+          They enter your 8-character code and join your group. Free — for all of you.
         </Text>
         {invite?.displayCode ? (
           <Text style={[textStyles.label.style, styles.code]}>
             {invite.isDev ? `DEMO CODE ${invite.displayCode}` : `CODE ${invite.displayCode}`}
           </Text>
         ) : null}
+        <Text style={[textStyles.caption.style, styles.reuseNote]}>
+          One code for the whole group — tell everyone.
+        </Text>
         <Pressable accessibilityRole="button" accessibilityLabel="Send the code" onPress={() => void share()} style={({ pressed }) => [styles.primary, pressed && { opacity: 0.9 }]}>
           <Text style={[textStyles.bodyStrong.style, { color: colors.text.onVolt.hex }]}>Send the code</Text>
         </Pressable>
@@ -109,6 +112,7 @@ const styles = StyleSheet.create({
   headline: { color: colors.text.primary.hex, marginTop: spacing.sm },
   body: { color: colors.text.secondary.hex, paddingRight: spacing.xl },
   code: { color: colors.text.muted.hex },
+  reuseNote: { color: colors.text.muted.hex, alignSelf: 'center', marginTop: -spacing.sm },
   primary: {
     height: 56,
     borderRadius: radius.lg,

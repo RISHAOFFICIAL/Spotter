@@ -27,7 +27,6 @@ import {
   WORKOUT_BUCKET,
   type WorkoutLog,
   type WeeklyContext,
-  type PartnerInfo,
   type GroupMemberInfo,
   type WorkoutType,
   type DevPhoto,
@@ -177,8 +176,6 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
           },
         ]
       : [];
-    const partner: PartnerInfo | null = members[0] ?? null;
-    const partnerDisplayName = members[0]?.displayName ?? null;
     const authorName = (userId: string): string =>
       userId === session.user.id
         ? userName
@@ -204,10 +201,7 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
         weeklyGoal,
         weekStartDay,
         logs,
-        hasPartner: members.length > 0,
         members,
-        partner,
-        partnerDisplayName,
         teamName,
         // DEV mock never "ends" a week — ring stays honest-volt, no red scare.
         weekEndedUnmet: false,
@@ -258,8 +252,6 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
       hasLogs: (rows ?? []).some((r) => r.user_id === id),
     };
   });
-  const partner: PartnerInfo | null = members[0] ?? null;
-  const partnerDisplayName = members[0]?.displayName ?? null;
 
   // Naming feature: read the group's optional team_name (group-scoped
   // `groups_select_member` policy — any member can read; creator still writes).
@@ -293,10 +285,7 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
       logs: weekRows
         .map((r) => rowToLog(r, signed.get(r.photo_path) ?? '', authorName(r.user_id)))
         .sort((a, b) => (a.loggedAt < b.loggedAt ? 1 : -1)),
-      hasPartner: members.length > 0,
       members,
-      partner,
-      partnerDisplayName,
       teamName,
       weekEndedUnmet: now >= weekEnd && ownWeek.length < weeklyGoal,
     },
