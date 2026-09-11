@@ -45,6 +45,7 @@ export function ProfileScreen() {
   const [members, setMembers] = useState<GroupMemberInfo[]>([]);
   const [petNames, setPetNames] = useState<Record<string, string>>({});
   const [teamNameValue, setTeamNameValue] = useState('');
+  const [groupCreatorId, setGroupCreatorId] = useState<string | null>(null);
   const [namingBusy, setNamingBusy] = useState(false);
 
   // Leave group (compliance: stop receiving member UGC). Two-tap confirm: the
@@ -59,6 +60,7 @@ export function ProfileScreen() {
     if (!ctx.ok || !ctx.context) return;
     setMembers(ctx.context.members);
     setTeamNameValue(ctx.context.teamName ?? '');
+    setGroupCreatorId(ctx.context.groupCreatorId ?? null);
     setPetNames(petMap);
   };
 
@@ -70,6 +72,7 @@ export function ProfileScreen() {
       if (ctx.ok && ctx.context) {
         setMembers(ctx.context.members);
         setTeamNameValue(ctx.context.teamName ?? '');
+        setGroupCreatorId(ctx.context.groupCreatorId ?? null);
       }
       setPetNames(petMap);
     })();
@@ -211,7 +214,13 @@ export function ProfileScreen() {
                 accessibilityLabel="Team name"
               />
               <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
-                Shown in the feed header for everyone in the group.
+                {/* Team-name caption (groups-copy-spec §4) — creator vs
+                    non-creator, driven by WeeklyContext.groupCreatorId. When
+                    the creator is unknown (null in a group), default to the
+                    read-only line — honest either way. */}
+                {groupCreatorId === session?.user?.id
+                  ? 'Shown in the feed header for everyone in the group.'
+                  : 'Only the person who started the group can change its name.'}
               </Text>
 
               <AppButton label="Save" onPress={() => void saveNaming()} loading={namingBusy} style={{ marginTop: spacing.lg }} />

@@ -184,7 +184,11 @@ export async function lookupInvite(code: string): Promise<PendingInviteInfo> {
       if (row?.found) {
         return {
           found: true,
-          inviterName: row.inviter_name ?? 'Your partner',
+          // get_invite returns the inviter's REAL first name (split_part of
+          // users.name, which is NOT NULL — so the fallback is unreachable).
+          // When it is somehow missing, say "them" — never the retired
+          // "partner" term (groups-copy-spec §5).
+          inviterName: row.inviter_name ?? 'them',
           inviterHasLogs: row.inviter_has_logs ?? false,
           memberCount: typeof row.member_count === 'number' ? row.member_count : 0,
           hasGroup: row.has_group ?? false,
@@ -200,11 +204,13 @@ export async function lookupInvite(code: string): Promise<PendingInviteInfo> {
   if (!invite || invite.status !== 'pending') {
     return { found: false, inviterName: '', inviterHasLogs: false, memberCount: 0, hasGroup: false };
   }
-  const inviter = await devMock.getUserById(invite.inviter_id);
   const inviterState = await devMock.getPairState(invite.inviter_id);
   return {
     found: true,
-    inviterName: inviter?.email.split('@')[0] ?? 'Dev Partner',
+    // The inviter's real first name (devMock.getDisplayName resolves the
+    // profile name — e.g. seeded member "Maya" — else the email prefix). The
+    // old 'Dev Partner' fallback is gone; unknown users read as "them".
+    inviterName: (await devMock.getDisplayName(invite.inviter_id)) ?? 'them',
     inviterHasLogs: (await devMock.listWorkouts(invite.inviter_id)).length > 0,
     memberCount: inviterState.accepted ? 1 : 0,
     hasGroup: inviterState.accepted,
@@ -276,12 +282,13 @@ export async function acceptInvite(code: string): Promise<AcceptInviteResult> {
     if (inviter && inviter.id !== session.user.id) {
       // Real two-user accept: pair the current user with the inviter.
       await devMock.acceptDevPairWith(session.user.id, inviter);
-      return { ok: true, inviterName: inviter.email.split('@')[0] ?? 'Partner', memberCount: 1 };
+      return { ok: true, inviterName: (await devMock.getDisplayName(inviter.id)) ?? 'them', memberCount: 1 };
     }
     // Self-accept keeps the slice-C single-user demo story: pairs with the
     // preset demo partner so the shared feed renders without a real person.
     await devMock.acceptDevPair(session.user.id);
-    return { ok: true, inviterName: 'Dev Partner', memberCount: 1 };
+    const partner = await devMock.getOrSeedPartner();
+    return { ok: true, inviterName: (await devMock.getDisplayName(partner.id)) ?? 'them', memberCount: 1 };
   }
 
   const { data, error } = await supabase.rpc('join_group', { p_token: normalized });

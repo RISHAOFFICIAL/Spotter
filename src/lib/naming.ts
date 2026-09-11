@@ -194,8 +194,19 @@ export async function setTeamName(name: string): Promise<{ ok: boolean; error?: 
   const trimmed = name.trim();
 
   if (session.isDevMode || !supabase) {
-    // DEV MOCK — shared pair-group key (mirrors the real groups.team_name).
-    await devMock.saveTeamName(trimmed || null);
+    // DEV MOCK — mirror the real branch: resolve the user's shared dev group
+    // (2-person pair OR the seeded 3-person demo group — devMock mirrors the
+    // my_group() RPC) and write the team name scoped to THAT group's key, same
+    // as real groups.team_name. Solo → honest "start a group first" error,
+    // matching the real-mode RLS outcome. Deliberately no creator check here:
+    // the dev store has no write RLS, and Profile renders the read-only caption
+    // via WeeklyContext.groupCreatorId (the spec's "on save failure" string
+    // still comes from the REAL branch below).
+    const shared = await devMock.findSharedDevGroup(session.user.id);
+    if (!shared) {
+      return { ok: false, error: 'Start a group first, then name it.' };
+    }
+    await devMock.saveTeamName(trimmed || null, shared.group_id);
     return { ok: true };
   }
 

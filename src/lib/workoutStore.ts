@@ -153,33 +153,42 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
   weekEnd.setDate(weekEnd.getDate() + 7);
 
   if (session.isDevMode || !supabase) {
-    // ---- DEV MOCK — same shape from async storage + local files (slice C:
-    // two-user: own logs count for the ring; co-member logs merge into the feed).
-    const pair = await devMock.getPairState(session.user.id);
+    // ---- DEV MOCK — same shape from async storage + local files. The group
+    // is resolved from memberships (devMock.findSharedDevGroup — the dev mirror
+    // of the real my_group() RPC), so the 2-person pair AND the seeded 3-person
+    // demo group emit the exact same WeeklyContext shape as real mode: own logs
+    // count for the ring; co-member logs merge into the feed.
+    const shared = await devMock.findSharedDevGroup(session.user.id);
+    const groupMembers = shared?.members ?? [];
+    const memberIds = shared?.member_ids ?? [];
+
     const rows = await devMock.listWorkouts(session.user.id);
-    const memberRows = pair.partner ? await devMock.listWorkouts(pair.partner.id) : [];
+    const memberRows: WorkoutRow[] = [];
+    for (const uid of memberIds) {
+      memberRows.push(...(await devMock.listWorkouts(uid)));
+    }
     const allRows = [...rows, ...memberRows];
 
     // Naming feature: per-member pet names (local-only map) + shared team name
-    // (dev pair group). Display name = local pet name when set, else the
-    // member's real first name — the same rule real mode applies.
+    // scoped to the resolved group (mirrors real groups.team_name). Display
+    // name = local pet name when set, else the member's real first name — the
+    // same rule real mode applies.
     const petNames = await getPetNames();
-    const teamName = await devMock.getTeamName();
-    const members: GroupMemberInfo[] = pair.partner
-      ? [
-          {
-            id: pair.partner.id,
-            firstName: (pair.partner.name ?? 'Partner').split(' ')[0],
-            displayName:
-              petNames[pair.partner.id]?.trim() || (pair.partner.name ?? 'Partner').split(' ')[0],
-            hasLogs: memberRows.length > 0,
-          },
-        ]
-      : [];
+    const teamName = shared ? await devMock.getTeamName(shared.group_id) : null;
+    const members: GroupMemberInfo[] = [];
+    for (const m of groupMembers) {
+      if (m.user_id === session.user.id) continue;
+      const firstName = ((await devMock.getDisplayName(m.user_id)) ?? 'Member').split(' ')[0];
+      members.push({
+        id: m.user_id,
+        firstName,
+        displayName: petNames[m.user_id]?.trim() || firstName,
+        hasLogs: memberRows.some((r) => r.user_id === m.user_id),
+      });
+    }
+    const memberAuthorById = new Map(members.map((m) => [m.id, m.displayName]));
     const authorName = (userId: string): string =>
-      userId === session.user.id
-        ? userName
-        : (members.find((m) => m.id === userId)?.displayName ?? 'Member');
+      userId === session.user.id ? userName : (memberAuthorById.get(userId) ?? 'Member');
 
     const inWeek = (r: WorkoutRow) => {
       const t = new Date(r.logged_at);
@@ -195,6 +204,9 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
         ),
       )
       .sort((a, b) => (a.loggedAt < b.loggedAt ? 1 : -1));
+    // The member who STARTED the group: the admin seat (dev mirror of
+    // groups.creator_id — the inviter on a pair, the seeding user on the demo).
+    const creatorMembership = groupMembers.find((m) => m.role === 'admin');
     return {
       ok: true,
       context: {
@@ -203,6 +215,7 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
         logs,
         members,
         teamName,
+        groupCreatorId: creatorMembership?.user_id ?? null,
         // DEV mock never "ends" a week — ring stays honest-volt, no red scare.
         weekEndedUnmet: false,
       },
@@ -253,16 +266,23 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
     };
   });
 
-  // Naming feature: read the group's optional team_name (group-scoped
-  // `groups_select_member` policy — any member can read; creator still writes).
+  // Naming feature: read the group's optional team_name + its creator
+  // (group-scoped `groups_select_member` policy — any member can read; the
+  // creator still writes). creator_id drives the Profile caption: only the
+  // person who started the group can change its name.
   let teamName: string | null = null;
+  let groupCreatorId: string | null = null;
   if (group.group_id) {
     const { data: groupRow } = await supabase
       .from('groups')
-      .select('team_name')
+      .select('team_name, creator_id')
       .eq('id', group.group_id)
       .maybeSingle();
     teamName = groupRow?.team_name?.trim() || null;
+    groupCreatorId =
+      typeof groupRow?.creator_id === 'string'
+        ? groupRow.creator_id
+        : (group.creator_id ?? null); // defensive passthrough if a future my_group adds it
   }
 
   const memberAuthorById = new Map(members.map((m) => [m.id, m.displayName]));
@@ -287,6 +307,7 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
         .sort((a, b) => (a.loggedAt < b.loggedAt ? 1 : -1)),
       members,
       teamName,
+      groupCreatorId,
       weekEndedUnmet: now >= weekEnd && ownWeek.length < weeklyGoal,
     },
   };

@@ -62,6 +62,12 @@ export interface WeeklyContext {
    * When set, the feed header shows this instead of "With {names}".
    */
   teamName: string | null;
+  /**
+   * Id of the member who STARTED the group (real: `groups.creator_id`; dev:
+   * the inviter/admin). Null when solo. Drives the Profile team-name caption
+   * — only the creator can change the group name (groups-copy-spec §4).
+   */
+  groupCreatorId: string | null;
   /** Week already ended AND goal missed (ring turns danger red only then). */
   weekEndedUnmet: boolean;
 }
@@ -74,6 +80,10 @@ export interface MyGroupResult {
   member_ids: string[];
   /** Number of co-members (0 when solo). */
   member_count: number;
+  /** Group creator id — DEFENSIVE passthrough: the v1.0 `my_group()` return
+   * does not include it (the store reads `groups.creator_id` directly), but a
+   * future schema adding `creator` to the jsonb keeps this parsed. */
+  creator_id?: string | null;
 }
 
 /**
@@ -86,14 +96,18 @@ export function parseMyGroup(data: unknown): MyGroupResult {
     group_id?: string | null;
     member_ids?: unknown;
     member_count?: number;
+    creator?: string | null;
+    creator_id?: string | null;
   } | null;
   const memberIds = Array.isArray(raw?.member_ids)
     ? raw.member_ids.filter((x): x is string => typeof x === 'string')
     : [];
+  const creatorId = raw?.creator_id ?? raw?.creator ?? null;
   return {
     group_id: raw?.group_id ?? null,
     member_ids: memberIds,
     member_count: raw?.member_count ?? memberIds.length,
+    ...(typeof creatorId === 'string' ? { creator_id: creatorId } : {}),
   };
 }
 
