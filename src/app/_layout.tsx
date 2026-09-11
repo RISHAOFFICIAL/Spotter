@@ -48,6 +48,7 @@ function Gate() {
         <>
           <Stack.Screen name="(home)/(tabs)/index" />
           <Stack.Screen name="(profile)/index" />
+          <Stack.Screen name="(promises)/index" />
           <Stack.Screen name="(accept)/index" />
           <Stack.Screen name="(invite)/index" />
         </>

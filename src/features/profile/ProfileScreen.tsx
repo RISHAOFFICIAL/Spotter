@@ -22,7 +22,15 @@ import { AppButton, TextButton } from '@/components/AppButton';
 import { deleteAccount } from '@/lib/accountDeletion';
 import { leaveGroup } from '@/lib/invites';
 import { getPetNames, setPetNameFor, setTeamName } from '@/lib/naming';
-import { getMissPromise, setMissPromise, MISS_PROMISE_MAX } from '@/lib/missPromise';
+import { getMissPromise, setMissNote, getMissWitnessId, MISS_PROMISE_MAX } from '@/lib/missPromise';
+import {
+  getOpenPromiseCount,
+  PROFILE_PROMISES_CAPTION,
+  PROFILE_MISS_CAPTION,
+  MISSSET_TO_ROW_LABEL,
+  SOLO_PAIR_UP_FIRST,
+  visibleOnlyToLine,
+} from '@/lib/promises';
 import {
   getNotificationPrefs,
   setNotificationPref,
@@ -51,17 +59,27 @@ export function ProfileScreen() {
   // call each co-member — shown to me only) + the optional shared group team
   // name. All fall back to current behavior when unset.
   const [members, setMembers] = useState<GroupMemberInfo[]>([]);
+  // "In a group" ⇔ at least one co-member (shared group); drives the Promises
+  // row enabled state (solo users get the disabled "Pair up first" row).
+  const inGroup = members.length > 0;
   const [petNames, setPetNames] = useState<Record<string, string>>({});
   const [teamNameValue, setTeamNameValue] = useState('');
   const [groupCreatorId, setGroupCreatorId] = useState<string | null>(null);
   const [namingBusy, setNamingBusy] = useState(false);
 
-  // Miss promise (v1.1 Build #2, S slice): an OPTIONAL personal note — "If I
-  // miss, I owe you: ___". Set/edited/cleared by each member for THEMSELVES,
-  // ≤80 chars, private to the pair, shown to the partner only via the
-  // future recap. Never a wager/enforcement system — neutral, optional copy.
+  // Miss promise (v1.1 Build #2, S slice → Treats/Promises ledger owner
+  // 09-11): an OPTIONAL personal note — "If I miss, I owe you: ___". Set/
+  // edited/cleared by each member for THEMSELVES, ≤80 chars, pair-private (the
+  // note + its witness — auto-resolved in a 2-person group, picked in 3+ —
+  // visible to nobody until the member misses a week). Never a wager/
+  // enforcement system — neutral, optional copy.
   const [missPromise, setMissPromiseValue] = useState('');
+  const [missWitness, setMissWitness] = useState<string | null>(null);
   const [missPromiseBusy, setMissPromiseBusy] = useState(false);
+  // Ledger: open-promise badge for the Profile row + the witness picker state
+  // ("Who's it to?" — shown only in 3+ groups; 2-person auto-resolves).
+  const [openPromiseCount, setOpenPromiseCount] = useState(0);
+  const [witnessPickerOpen, setWitnessPickerOpen] = useState(false);
   // Notification preferences (v1.1 Build #3, slice 1): the four push types as
   // per-user toggles. Reads once on mount; each flip writes through the lib
   // (lazy defaults row; own-row RLS in real mode, devMock parity in dev).
@@ -76,7 +94,15 @@ export function ProfileScreen() {
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadNaming = async () => {
-    const [ctx, petMap, miss] = await Promise.all([fetchWeeklyContext(), getPetNames(), getMissPromise()]);
+    const [ctx, petMap, miss, witness, count] = await Promise.all([
+      fetchWeeklyContext(),
+      getPetNames(),
+      getMissPromise(),
+      getMissWitnessId(),
+      getOpenPromiseCount(),
+    ]);
+    setOpenPromiseCount(count);
+    setMissWitness(witness);
     if (!ctx.ok || !ctx.context) return;
     setMembers(ctx.context.members);
     setTeamNameValue(ctx.context.teamName ?? '');
@@ -88,8 +114,16 @@ export function ProfileScreen() {
   useEffect(() => {
     let mounted = true;
     (async () => {
-      const [ctx, petMap, miss] = await Promise.all([fetchWeeklyContext(), getPetNames(), getMissPromise()]);
+      const [ctx, petMap, miss, witness, count] = await Promise.all([
+        fetchWeeklyContext(),
+        getPetNames(),
+        getMissPromise(),
+        getMissWitnessId(),
+        getOpenPromiseCount(),
+      ]);
       if (!mounted) return;
+      setOpenPromiseCount(count);
+      setMissWitness(witness);
       if (ctx.ok && ctx.context) {
         setMembers(ctx.context.members);
         setTeamNameValue(ctx.context.teamName ?? '');
@@ -126,16 +160,30 @@ export function ProfileScreen() {
     setMessage(teamRes.ok ? 'Saved.' : (teamRes.error ?? 'Saved.'));
   };
 
-  // Save (or clear, when empty) THIS user's own miss promise. Trim + ≤80
-  // handled in the lib; this just flushes the field and reports truthfully.
+  // Save (or clear, when empty) THIS user's own miss note through the
+  // Treats/Promises ledger write path (trim + ≤80 handled in the lib). The
+  // witness: 2-person groups auto-resolve (null passed); 3+ groups require the
+  // pick from the "To:" row (missWitness). Empty clears BOTH note + witness.
   const saveMissPromise = async (text: string) => {
     if (missPromiseBusy) return;
+    const trimmed = text.trim();
+    // 3+ group: a non-empty note needs a witness pick.
+    if (trimmed && members.length >= 2 && !missWitness) {
+      setMessage('Choose who this promise is to.');
+      return;
+    }
     setMissPromiseBusy(true);
     setMessage(null);
-    const res = await setMissPromise(text);
-    if (res.ok) setMissPromiseValue(text);
+    const res = await setMissNote(text, trimmed ? (members.length >= 2 ? missWitness : null) : null);
+    if (res.ok) {
+      setMissPromiseValue(text);
+      setMissWitness(res.witnessId ?? null);
+      setOpenPromiseCount(await getOpenPromiseCount());
+      setMessage('Saved. This shows only if you miss the week.');
+    } else {
+      setMessage(res.error ?? 'Could not save.');
+    }
     setMissPromiseBusy(false);
-    setMessage(res.ok ? 'Saved. This shows only if you miss the week.' : (res.error ?? 'Could not save.'));
   };
 
   // Flip ONE notification toggle (v1.1 Build #3). Optimistic local flip +
@@ -283,10 +331,12 @@ export function ProfileScreen() {
 
               <AppButton label="Save" onPress={() => void saveNaming()} loading={namingBusy} style={{ marginTop: spacing.lg }} />
 
-              {/* Miss promise (v1.1 Build #2, S slice) — optional personal
-                  note shown ONLY if THIS member misses a week. Low-emphasis,
-                  neutral, never shaming: it is a note to the pair, NOT a
-                  wager/stake/bet/debt/enforcement system. */}
+              {/* Miss promise → Treats/Promises ledger (owner 09-11): optional
+                  personal note shown ONLY if THIS member misses a week, seen
+                  ONLY by them + the one picked witness. Low-emphasis, neutral,
+                  never shaming: a note to the pair, NOT a wager/stake/bet/debt
+                  system. 2-person: witness auto-resolves ("To:" hidden —
+                  read-only line). 3+: "To: {Name}" row opens the picker. */}
               <Text style={[textStyles.label.style, { color: colors.text.muted.hex, marginTop: spacing.xxl }]}>IF I MISS…</Text>
               <TextInput
                 value={missPromise}
@@ -298,8 +348,27 @@ export function ProfileScreen() {
                 style={styles.input}
                 accessibilityLabel="Miss note — what I owe if I miss the week"
               />
+              {members.length >= 2 ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Choose who this promise is to"
+                  onPress={() => setWitnessPickerOpen(true)}
+                  style={({ pressed }) => [styles.witnessRow, pressed && { opacity: 0.8 }]}
+                >
+                  <Text style={[textStyles.captionStrong.style, { color: colors.text.primary.hex }]}>
+                    {MISSSET_TO_ROW_LABEL.replace('{Name}', missWitness ? (members.find((m) => m.id === missWitness)?.displayName ?? 'A member') : 'Choose…')}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={14} color={colors.text.muted.hex} />
+                </Pressable>
+              ) : (
+                members.length === 1 && missWitness ? (
+                  <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+                    To: {members.find((m) => m.id === missWitness)?.displayName ?? 'A member'} (your group&apos;s other member)
+                  </Text>
+                ) : null
+              )}
               <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
-                A private note your partner sees only if you miss the week. Optional.
+                {PROFILE_MISS_CAPTION}
               </Text>
               <View style={styles.missRow}>
                 <TextButton label="Save" onPress={() => void saveMissPromise(missPromise)} color={colors.text.secondary.hex} />
@@ -338,6 +407,42 @@ export function ProfileScreen() {
               Start a group to add nicknames or a team name.
             </Text>
           )}
+        </View>
+
+        {/* Promises row → the Treats/Promises ledger screen (owner 09-11,
+            pair-private; NO tab). Hidden/disabled for solo users — "pair up
+            first" (spec §5): promises are between you and someone in your
+            group. Trailing badge = open entries where I am maker OR witness. */}
+        <Text style={[textStyles.label.style, { color: colors.text.muted.hex, marginTop: spacing.xxxl }]}>PROMISES</Text>
+        <View style={styles.card}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={inGroup ? 'Promises' : 'Promises — pair up first'}
+            onPress={inGroup ? () => router.push('/(promises)') : undefined}
+            disabled={!inGroup}
+            style={({ pressed }) => [styles.promiseRow, pressed && inGroup && { opacity: 0.8 }]}
+          >
+            <View style={styles.promiseCopy}>
+              <Text style={[textStyles.captionStrong.style, { color: inGroup ? colors.text.primary.hex : colors.text.muted.hex }]}>
+                Promises
+              </Text>
+              <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+                {inGroup ? PROFILE_PROMISES_CAPTION : SOLO_PAIR_UP_FIRST}
+              </Text>
+            </View>
+            {inGroup ? (
+              <>
+                {openPromiseCount > 0 && (
+                  <View style={styles.badge} accessibilityLabel={`${openPromiseCount} open promises`}>
+                    <Text style={[textStyles.label.style, { color: colors.text.onVolt.hex }]}>{openPromiseCount}</Text>
+                  </View>
+                )}
+                <Ionicons name="chevron-forward" size={16} color={colors.text.muted.hex} />
+              </>
+            ) : (
+              <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>—</Text>
+            )}
+          </Pressable>
         </View>
 
         {/* Notification preferences (v1.1 Build #3) — muted switches matching
@@ -404,6 +509,42 @@ export function ProfileScreen() {
         )}
       </View>
 
+      {/* Witness picker ("Who's it to?" — 3+ groups only; 2-person groups
+          auto-resolve and never see this). Picking writes the witness for the
+          CURRENT note text (saved on Save). */}
+      {witnessPickerOpen && (
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modal}>
+            <Text style={[textStyles.headline.style, { color: colors.text.primary.hex, textAlign: 'center' }]}>
+              Who&apos;s it to?
+            </Text>
+            <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex, textAlign: 'center', marginTop: spacing.sm }]}>
+              Only you and the person you pick will see it — and only if you actually miss the week. Totally optional.
+            </Text>
+            {members.map((m) => {
+              const selected = missWitness === m.id;
+              return (
+                <Pressable
+                  key={m.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Promise to ${m.displayName}`}
+                  onPress={() => {
+                    setMissWitness(m.id);
+                    setWitnessPickerOpen(false);
+                  }}
+                  style={({ pressed }) => [styles.witnessChoice, selected && styles.witnessChoiceSelected, pressed && { opacity: 0.9 }]}
+                >
+                  <Text style={[textStyles.bodyStrong.style, { color: selected ? colors.text.onVolt.hex : colors.text.primary.hex }]}>
+                    {m.displayName}
+                  </Text>
+                </Pressable>
+              );
+            })}
+            <AppButton label="Cancel" type="ghost" onPress={() => setWitnessPickerOpen(false)} style={{ marginTop: spacing.sm }} />
+          </View>
+        </View>
+      )}
+
       {/* Explicit confirm dialog — never a single tap (5.1.1(v)). */}
       {confirmOpen && (
         <View style={styles.modalBackdrop}>
@@ -452,6 +593,31 @@ const styles = StyleSheet.create({
   dangerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   unpairRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.md },
   missRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, marginTop: spacing.sm },
+  witnessRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.sm, paddingVertical: spacing.xs },
+  promiseRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.lg },
+  promiseCopy: { flex: 1, gap: 2 },
+  badge: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.brand.primary.hex,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xs,
+  },
+  witnessChoice: {
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.background.overlay.hex,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
+    alignItems: 'center',
+    marginTop: spacing.sm,
+  },
+  witnessChoiceSelected: {
+    backgroundColor: colors.brand.primary.hex,
+    borderColor: colors.brand.primary.hex,
+  },
   notifRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.lg, paddingVertical: spacing.xs },
   notifCopy: { flex: 1, gap: 2 },
   input: {

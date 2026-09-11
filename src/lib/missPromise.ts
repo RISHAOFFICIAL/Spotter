@@ -138,16 +138,27 @@ export async function getMissPromise(): Promise<string | null> {
 }
 
 /**
- * Save (or clear, when empty) THIS user's own miss promise. Trim, enforce
- * ≤80 chars (over-length → error, nothing persisted), empty → clear.
+ * Save (or clear, when empty) THIS user's own miss note ("If I miss, I owe
+ * you: ___") and its witness. Trim, enforce ≤80 chars (over-length → error,
+ * nothing persisted), empty → clears BOTH the note and the witness.
  *
- * REAL: update ONLY the current user's OWN membership row of the pair group
- * (the existing memberships_update_own RLS requires auth.uid() = user_id, so
- * this can never touch the partner's row). Unlike team_name, BOTH members may
- * write their own promise — no creator-only quirk. Returns ok/error so the
- * Profile UI can surface a truthful result.
+ * THE WITNESS (Treats/Promises ledger, owner 2026-09-11): in a 2-person group
+ * the witness auto-resolves to the other member (any witnessId passed is
+ * ignored, exactly like the RPC); in a 3+ group the maker must pick a current
+ * co-member ≠ self (else error, nothing persisted). Solo → error (the ledger
+ * entry point is hidden for solo users anyway).
+ *
+ * REAL: calls the SECURITY DEFINER `set_miss_note` RPC — the ONLY write path
+ * (a direct memberships.update would also work under own-row RLS, but the RPC
+ * centralizes trim/≤80/witness-resolution and returns the resolved witness).
+ * DEV: devMock.saveMissNote — the same resolution rules on the local store.
+ * Returns ok/error so the Profile UI can surface a truthful result, plus the
+ * resolved witness id (null when cleared).
  */
-export async function setMissPromise(text: string): Promise<{ ok: boolean; error?: string }> {
+export async function setMissNote(
+  text: string,
+  witnessId: string | null,
+): Promise<{ ok: boolean; error?: string; witnessId?: string | null }> {
   const session = await getStoredSession();
   if (!session) return { ok: false, error: 'Sign in first.' };
   const trimmed = text.trim();
@@ -156,28 +167,47 @@ export async function setMissPromise(text: string): Promise<{ ok: boolean; error
   }
 
   if (session.isDevMode || !supabase) {
-    // DEV MOCK — per-user key (mirrors the real membership column).
-    await devMock.saveMissPromise(session.user.id, trimmed);
-    return { ok: true };
+    // DEV MOCK — same trim, ≤80 and witness-resolution rules.
+    return devMock.saveMissNote(session.user.id, trimmed, witnessId);
   }
 
-  // REAL: update my own row in the pair group. null clears (empty string is
-  // stored as null to match "cleared"); the pair-group id is required because
-  // the promise lives on the pair membership, never the solo "Personal" one.
   try {
-    const pairGroupId = await findPairGroupId();
-    if (!pairGroupId) {
-      return { ok: false, error: 'Pair up with a partner first — the miss note belongs to your pair.' };
-    }
-    const { error } = await supabase
-      .from('memberships')
-      .update({ miss_promise: trimmed || null })
-      .eq('user_id', session.user.id)
-      .eq('group_id', pairGroupId);
+    const { data, error } = await supabase.rpc('set_miss_note', {
+      p_text: trimmed,
+      p_witness_id: witnessId,
+    });
     if (error) return { ok: false, error: error.message };
-    return { ok: true };
+    const resolved = (data as { witness_id?: string | null } | null)?.witness_id ?? null;
+    return { ok: true, witnessId: resolved };
   } catch {
     return { ok: false, error: "Can't reach server. Try again." };
+  }
+}
+
+/**
+ * Read the CURRENT user's own miss-note witness (''/null when unset or
+ * cleared). REAL: own membership row (own-row RLS). DEV: per-user key.
+ */
+export async function getMissWitnessId(): Promise<string | null> {
+  const session = await getStoredSession();
+  if (!session) return null;
+  const uid = session.user.id;
+
+  if (session.isDevMode || !supabase) {
+    return devMock.getMissWitnessId(uid);
+  }
+
+  try {
+    const { data } = await supabase
+      .from('memberships')
+      .select('miss_witness_id')
+      .eq('user_id', uid)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    return data?.miss_witness_id ?? null;
+  } catch {
+    return null;
   }
 }
 
