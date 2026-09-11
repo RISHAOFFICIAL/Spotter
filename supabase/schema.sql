@@ -157,6 +157,33 @@ create policy "workouts_delete_own" on public.workouts
 create index if not exists workouts_user_week_idx
   on public.workouts (user_id, logged_at desc);
 
+-- v1.0 dual-capture columns on EXISTING projects (camera-flow feature, owner
+-- decision 2026-09-11): the CREATE TABLE above declares photo_env/caption for
+-- fresh installs, but `create table if not exists` is a NO-OP when the table
+-- already exists — these idempotent ALTERs upgrade an existing live table
+-- (same pattern as the groups.team_name ALTER above) so a re-run converges:
+-- both fresh and existing projects end with photo_env/caption present.
+alter table public.workouts add column if not exists photo_env text;
+alter table public.workouts add column if not exists caption text;
+
+-- ...and the <=140-char caption check, added only when missing (never dropped
+-- or relaxed): a fresh install gets `workouts_caption_check` from the CREATE
+-- TABLE above; an existing table needs it added explicitly. This is the
+-- DB-level backstop for the client-side <=140 enforcement.
+do $s7$
+begin
+  if not exists (
+    select 1 from pg_constraint
+     where conrelid = 'public.workouts'::regclass
+       and conname = 'workouts_caption_check'
+  ) then
+    execute $$'alter table public.workouts'
+      || ' add constraint workouts_caption_check'
+      || ' check (caption is null or length(caption) between 1 and 140)'$$;
+  end if;
+end;
+$s7$;
+
 -- ---------------------------------------------------------------------------
 -- Photo storage — private "workouts" bucket + per-user object policies.
 --
@@ -184,29 +211,29 @@ create policy "workouts_storage_read_own" on storage.objects
   for select using (
     bucket_id = 'workouts'
     and auth.role() = 'authenticated'
-    and storage.foldername(name)[1] = auth.uid()::text
+    and starts_with(name, auth.uid()::text || '/')
   );
 create policy "workouts_storage_insert_own" on storage.objects
   for insert with check (
     bucket_id = 'workouts'
     and auth.role() = 'authenticated'
-    and storage.foldername(name)[1] = auth.uid()::text
+    and starts_with(name, auth.uid()::text || '/')
   );
 create policy "workouts_storage_update_own" on storage.objects
   for update using (
     bucket_id = 'workouts'
     and auth.role() = 'authenticated'
-    and storage.foldername(name)[1] = auth.uid()::text
+    and starts_with(name, auth.uid()::text || '/')
   ) with check (
     bucket_id = 'workouts'
     and auth.role() = 'authenticated'
-    and storage.foldername(name)[1] = auth.uid()::text
+    and starts_with(name, auth.uid()::text || '/')
   );
 create policy "workouts_storage_delete_own" on storage.objects
   for delete using (
     bucket_id = 'workouts'
     and auth.role() = 'authenticated'
-    and storage.foldername(name)[1] = auth.uid()::text
+    and starts_with(name, auth.uid()::text || '/')
   );
 
 -- NEVER relax the policies above. The bucket must stay private; photo URLs
@@ -326,7 +353,7 @@ create policy "workouts_storage_read_group" on storage.objects
   for select using (
     bucket_id = 'workouts'
     and auth.role() = 'authenticated'
-    and public.is_paired_with(storage.foldername(name)[1]::uuid)
+    and public.is_paired_with(split_part(name, '/', 1)::uuid)
   );
 
 -- Group-scoped read of a co-member's users row (names in the feed; the app
@@ -491,9 +518,25 @@ begin
 end;
 $f$;
 
-create trigger memberships_cap_guard_trg
-  before insert on public.memberships
-  for each row execute function public.memberships_cap_guard();
+-- The cap-keeping insert trigger is created ONLY when absent — an idempotent
+-- re-run guard. There is NO `drop trigger` anywhere in this file, so a re-run
+-- can never silently remove the always-on cap guard (live projects must keep
+-- this trigger: it is the table-level second line of defense behind
+-- join_group's exact count under lock).
+do $s7$
+begin
+  if not exists (
+    select 1 from pg_trigger t
+     where t.tgname = 'memberships_cap_guard_trg'
+       and t.tgrelid = 'public.memberships'::regclass
+       and not t.tgisinternal
+  ) then
+    execute $$'create trigger memberships_cap_guard_trg'
+      || ' before insert on public.memberships'
+      || ' for each row execute function public.memberships_cap_guard()'$$;
+  end if;
+end;
+$s7$;
 
 -- Authenticated: join the CURRENT auth.uid() to the inviter's group via token
 -- (replaces the old accept_invite; a 2-member pair is just the 2-seat case).
@@ -702,7 +745,7 @@ begin
   set local storage.allow_delete_query = 'true';
   delete from storage.objects
    where bucket_id = 'workouts'
-     and storage.foldername(name)[1] = my_id::text;
+     and starts_with(name, my_id::text || '/');
   if to_regclass('storage.prefixes') is not null then
     delete from storage.prefixes
      where bucket_id = 'workouts' and name = my_id::text || '/';
