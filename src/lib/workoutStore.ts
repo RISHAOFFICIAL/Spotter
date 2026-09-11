@@ -463,7 +463,6 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
   // creator still writes). creator_id drives the Profile caption: only the
   // person who started the group can change its name.
   let teamName: string | null = null;
-  let teamName: string | null = null;
   let groupCreatorId: string | null = null;
   // M slice: partner MissCard inputs — the partner is the single co-member
   // of a 2-person group (the promise is pair-private; in 3-person groups the
@@ -481,7 +480,7 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
       .from('memberships')
       .select('weekly_goal')
       .eq('user_id', partnerId)
-      .eq('group_id', group.group_id)
+      .eq('group_id', group.group_id ?? '')
       .maybeSingle();
     if (partnerSettings?.weekly_goal && partnerSettings.weekly_goal >= 1 && partnerSettings.weekly_goal <= 7) {
       partnerGoal = partnerSettings.weekly_goal;

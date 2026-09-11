@@ -139,13 +139,11 @@ const JULES_ID = 'dev_member_jules';
 const SOLO_EMAIL = 'solo.smoke@spotter.test';
 const ZOE_EMAIL = 'zoe.smoke@spotter.test';
 let userA, userB, userCrew, userZoe, invite, crewInvite;
-
 // Deterministic daytime clock for the dispatch engine: 12:00 UTC is NOT quiet
 // hours for the UTC recipient (and inside the day-cap's UTC day-key), so the
 // real dispatch paths (which read the clock themselves) pass at ANY wall-clock
 // hour — including 21:00–08:00 UTC when a `new Date()` clock would suppress.
 const DISPATCH_DAYTIME = new Date('2026-09-07T12:00:00Z');
-let userA, userB, invite;
 
 async function currentUserId() {
   const s = await getStoredSession();
@@ -369,214 +367,12 @@ await step('j. Leave group: both sides return to solo, own logs intact, re-pair 
   console.log(`        A+B leave → both solo, logs kept, fresh-code re-pair works`);
 });
 
-await step('k. 3-member demo group: crew sees 3 members (names + pet names) + creator id', async () => {
-  // S6: the demo email seeds its group at signup (devMock.createUser hook).
-  const res = await authenticate(CREW_EMAIL, 'pass1234');
-  ok(res.ok, `crew authenticate failed: ${res.error}`);
-  userCrew = await devMock.getUserById(await currentUserId());
-  ok(userCrew && userCrew.email === CREW_EMAIL, 'crew session not created');
-  const commit = await commitOnboarding({ weeklyGoal: 4, weekStart: 'Mon' });
-  ok(commit.ok, `crew commitOnboarding failed: ${commit.error}`);
-
-  // The group is a real 3-seat group: crew + Maya + Jules.
-  const seats = await devMock.getGroupMembers(DEV_DEMO_GROUP_ID);
-  ok(seats.length === 3, `demo group seats = ${seats.length} (expected 3)`);
-  ok(seats.some((m) => m.user_id === userCrew.id), 'crew seat missing');
-  ok(seats.some((m) => m.user_id === MAYA_ID) && seats.some((m) => m.user_id === JULES_ID), 'Maya/Jules seats missing');
-
-  const ctx = await fetchWeeklyContext();
-  ok(ctx.ok, `crew fetchWeeklyContext failed: ${ctx.error}`);
-
-  // Context members = co-members (excludes self): Maya + Jules, with the
-  // creator's local pet names (Coach/Stretch) overriding their real names.
-  const maya = ctx.context.members.find((m) => m.id === MAYA_ID);
-  const jules = ctx.context.members.find((m) => m.id === JULES_ID);
-  ok(ctx.context.members.length === 2, `crew co-members = ${ctx.context.members.length} (expected 2)`);
-  ok(maya && maya.firstName === 'Maya', `maya firstName = ${maya?.firstName} (real name kept)`);
-  ok(maya && maya.displayName === 'Coach', `maya displayName = ${maya?.displayName} (pet name Coach)`);
-  ok(maya && maya.displayName !== maya.firstName, 'pet name should override the real name for the creator');
-  ok(jules && jules.firstName === 'Jules', `jules firstName = ${jules?.firstName} (real name kept)`);
-  ok(jules && jules.displayName === 'Stretch', `jules displayName = ${jules?.displayName} (pet name Stretch)`);
-
-  // Creator info + shared team name.
-  ok(ctx.context.groupCreatorId === userCrew.id, `groupCreatorId = ${ctx.context.groupCreatorId} (expected crew)`);
-  ok(ctx.context.teamName === DEV_DEMO_TEAM_NAME, `teamName = ${ctx.context.teamName} (expected Crew Volt)`);
-  // ProfileScreen caption branch (the screen's exact condition): the creator
-  // gets the editable team-name field (S6 read-only follow-up).
-  ok(ctx.context.groupCreatorId === userCrew.id, 'creator branch: team name editable');
-  console.log(`        group ${DEV_DEMO_GROUP_ID}: crew + Maya + Jules, team "${DEV_DEMO_TEAM_NAME}"`);
-});
-
-await step('l. Feed + ring in a group: all members\u2019 logs visible, ring counts OWN only (crew 2 / Maya 1 / Jules 0)', async () => {
-  // Session is still crew (from step k).
-  const ctx = await fetchWeeklyContext();
-  ok(ctx.ok, `crew fetchWeeklyContext failed: ${ctx.error}`);
-
-  // The weekly feed merges every member's logs: crew 2, Maya 1 (Cycle), Jules 0.
-  const byAuthor = {};
-  for (const l of ctx.context.logs) byAuthor[l.userId] = (byAuthor[l.userId] ?? 0) + 1;
-  ok(ctx.context.logs.length === 3, `feed logs = ${ctx.context.logs.length} (expected 3)`);
-  ok(byAuthor[userCrew.id] === 2, `crew logs = ${byAuthor[userCrew.id]} (expected 2)`);
-  ok(byAuthor[MAYA_ID] === 1, `maya logs = ${byAuthor[MAYA_ID]} (expected 1)`);
-  ok(!(JULES_ID in byAuthor), 'jules should have 0 logs in the feed');
-  const mayaLog = ctx.context.logs.find((l) => l.userId === MAYA_ID && l.workoutType === 'Cycle');
-  ok(mayaLog, 'Maya\u2019s Cycle log missing from the shared feed');
-  ok(mayaLog.authorName === 'Coach', `Maya feed author = ${mayaLog.authorName} (pet name Coach in crew's view)`);
-
-  // Ring = the viewer's OWN logs only (product law): crew's ring is 2/4, never
-  // 3 (Maya's log must not count toward crew's ring).
-  const own = byAuthor[userCrew.id];
-  ok(own === 2, `crew own count = ${own} (expected 2)`);
-  ok(own < ctx.context.logs.length, 'crew ring must NOT include Maya\u2019s log');
-  const mayaMember = ctx.context.members.find((m) => m.id === MAYA_ID);
-  const julesMember = ctx.context.members.find((m) => m.id === JULES_ID);
-  ok(mayaMember?.hasLogs === true && julesMember?.hasLogs === false, 'hasLogs must reflect member log presence');
-  console.log(`        feed 3 logs (crew 2, Maya 1), ring own=2 — Maya's log visible but not ring-counted`);
-});
-
-await step('m. Non-creator (maya) view: creator id \u2260 self + read-only team-name caption branch', async () => {
-  const res = await authenticate(MAYA_EMAIL, 'pass5678');
-  ok(res.ok, `maya authenticate failed: ${res.error}`);
-  const mayaUser = await devMock.getUserById(await currentUserId());
-  ok(mayaUser && mayaUser.id === MAYA_ID, `maya session = ${mayaUser?.id} (expected dev_member_maya)`);
-
-  const ctx = await fetchWeeklyContext();
-  ok(ctx.ok, `maya fetchWeeklyContext failed: ${ctx.error}`);
-  ok(ctx.context.members.length === 2, `maya co-members = ${ctx.context.members.length} (expected 2)`);
-  const memberIds = ctx.context.members.map((m) => m.id).sort();
-  ok(memberIds.includes(userCrew.id) && memberIds.includes(JULES_ID), 'maya should see crew + Jules');
-
-  // Creator info: the group creator is crew, NOT maya.
-  ok(ctx.context.groupCreatorId === userCrew.id, `maya groupCreatorId = ${ctx.context.groupCreatorId} (expected crew)`);
-  ok(ctx.context.groupCreatorId !== mayaUser.id, 'maya is NOT the group creator');
-
-  // ProfileScreen caption logic (asserted via the context, exactly the screen's
-  // condition): non-creator → read-only team-name field + the verbatim caption
-  // "Only the person who started the group can change its name."
-  const isCreator = ctx.context.groupCreatorId === mayaUser.id;
-  ok(isCreator === false, 'non-creator must take the read-only team-name branch');
-
-  // Pet names stay LOCAL to the creator: maya sees Jules' real name, never
-  // crew's "Stretch" nickname; crew's own name renders as its real 'crew'.
-  const julesForMaya = ctx.context.members.find((m) => m.id === JULES_ID);
-  const crewForMaya = ctx.context.members.find((m) => m.id === userCrew.id);
-  ok(julesForMaya && julesForMaya.displayName === 'Jules', `jules for maya = ${julesForMaya?.displayName} (pet names are creator-local)`);
-  ok(crewForMaya && crewForMaya.displayName === crewForMaya.firstName && crewForMaya.firstName.length > 0, 'crew shows its real name to maya');
-  console.log(`        maya: creator=${userCrew.email}, read-only team-name branch (pet names not shared)`);
-});
-
-await step('n. Solo user (any other dev email): groupCreatorId null, zero co-members', async () => {
-  const res = await authenticate(SOLO_EMAIL, 'pass1234');
-  ok(res.ok, `solo authenticate failed: ${res.error}`);
-  await commitOnboarding({ weeklyGoal: 3, weekStart: 'Mon' });
-  const ctx = await fetchWeeklyContext();
-  ok(ctx.ok, `solo fetchWeeklyContext failed: ${ctx.error}`);
-  // Solo → no shared group: members.length 0 and groupCreatorId null (the
-  // paired single-co-member case — members.length 1 — is covered by steps h/i).
-  ok(ctx.context.members.length === 0, `solo co-members = ${ctx.context.members.length} (expected 0)`);
-  ok(ctx.context.groupCreatorId === null, `solo groupCreatorId = ${ctx.context.groupCreatorId} (expected null)`);
-  ok(ctx.context.teamName === null, 'solo teamName should be null');
-  console.log(`        solo: members 0, creator null — invite banner path unchanged`);
-});
-
-await step('o. Capacity guard: a 4th joiner can never seat into the full (3/3) demo group', async () => {
-  // Crew (creator) issues the code the 4th user will try. Clear the persisted
-  // invite ref first — it currently points at A's fresh code from step j — so
-  // crew's code is crew-owned and unique.
-  await removeItem('spotter.invite:v1');
-  const resCrew = await authenticate(CREW_EMAIL, 'pass1234');
-  ok(resCrew.ok, `crew re-auth failed: ${resCrew.error}`);
-  const crewCode = await getOrCreateInviteCode();
-  ok(crewCode.isDev, 'expected dev invite for crew');
-  crewInvite = crewCode;
-
-  // (a) Direct seat attempt through the dev join hook: getOrSeedDemoGroup is a
-  // no-op once the group exists — a 4th user can never be seeded in.
-  const resZoe = await authenticate(ZOE_EMAIL, 'pass1234');
-  ok(resZoe.ok, `zoe authenticate failed: ${resZoe.error}`);
-  userZoe = await devMock.getUserById(await currentUserId());
-  ok(userZoe && userZoe.email === ZOE_EMAIL, 'zoe session not created');
-  await devMock.getOrSeedDemoGroup(userZoe.id);
-  let seats = await devMock.getGroupMembers(DEV_DEMO_GROUP_ID);
-  ok(seats.length === 3, `demo group seats = ${seats.length} (expected 3 — cap never exceeded)`);
-  ok(!seats.some((m) => m.user_id === userZoe.id), 'zoe must not hold a demo-group seat');
-
-  // (b) App-flow join attempt: accepting crew's code routes zoe into the dev
-  // PAIR group (the dev accept path never seats anyone into the full demo
-  // group) — the dev-store mirror of live join_group raising 'this group is
-  // full' (run_smoke.py f8_cap_reject asserts that HTTP 400, untouched here).
-  // NOTE: DEV_PAIR_GROUP_ID is one shared pair-group id for the whole dev
-  // store — A+B (re-paired in step j) already hold seats there — so assert the
-  // deltas, not absolute seats.
-  const info = await lookupInvite(crewCode.displayCode);
-  ok(info.found, 'crew code should resolve for zoe');
-  const pairSeatsBefore = (await devMock.getGroupMembers(DEV_PAIR_GROUP_ID)).length;
-  const acc = await acceptInvite(crewCode.displayCode);
-  ok(acc.ok, `zoe accept failed: ${acc.error}`);
-  seats = await devMock.getGroupMembers(DEV_DEMO_GROUP_ID);
-  ok(seats.length === 3, `demo group seats after join = ${seats.length} (still 3/3)`);
-  const zoeMems = await devMock.getDevMemberships(userZoe.id);
-  ok(!zoeMems.some((m) => m.group_id === DEV_DEMO_GROUP_ID), 'zoe must never hold a demo-group seat');
-  ok(zoeMems.filter((m) => m.group_id === DEV_PAIR_GROUP_ID).length === 1, 'zoe holds exactly one seat (her only membership)');
-  ok(
-    (await devMock.getDevMemberships(userCrew.id)).filter((m) => m.group_id === DEV_PAIR_GROUP_ID).length === 1,
-    'crew holds exactly one seat in the pair group',
-  );
-  const pairSeatsAfter = (await devMock.getGroupMembers(DEV_PAIR_GROUP_ID)).length;
-  ok(pairSeatsAfter === pairSeatsBefore + 2, `pair group grew by exactly zoe+crew (${pairSeatsBefore} → ${pairSeatsAfter})`);
-  const zoeShared = await devMock.findSharedDevGroup(userZoe.id);
-  ok(zoeShared && zoeShared.group_id === DEV_PAIR_GROUP_ID, `zoe group = ${zoeShared?.group_id} (expected the dev pair group)`);
-  ok(zoeShared && zoeShared.member_ids.includes(userCrew.id), `zoe co-members = ${zoeShared?.member_ids?.join(', ')} (crew among them)`);
-
-  // The real-mode reject message (join_group raise) maps to the exact friendly
-  // copy the Accept screen shows for a full group (groups-copy-spec §2.5).
-  ok(
-    friendlyAcceptError('this group is full') === "This group's full — 3 people max. Start your own group with your code.",
-    `full-group copy: ${friendlyAcceptError('this group is full')}`,
-  );
-  console.log(`        demo stays 3/3; zoe routed to own pair group with crew; full-group copy verified`);
-});
-
-await step('p. Duplicate join: re-entry never double-seats (already-member guard, dev mirror)', async () => {
-  // (a) Zoe re-accepts crew's code — she is already in the dev pair group with
-  // crew. The dev membership upsert must leave exactly ONE seat per user and
-  // never change the group-wide seat count; live join_group raises 'you are
-  // already in this group' (run_smoke.py f8_dup_b asserts that HTTP 400 —
-  // untouched here).
-  const pairSeatsBefore = (await devMock.getGroupMembers(DEV_PAIR_GROUP_ID)).length;
-  const again = await acceptInvite(crewInvite.displayCode);
-  ok(again.ok, `zoe second accept failed: ${again.error}`);
-  const zoeMems = await devMock.getDevMemberships(userZoe.id);
-  ok(
-    zoeMems.filter((m) => m.group_id === DEV_PAIR_GROUP_ID).length === 1,
-    'zoe must hold exactly ONE pair-group membership (no duplicate seat)',
-  );
-  const pairSeats = await devMock.getGroupMembers(DEV_PAIR_GROUP_ID);
-  ok(pairSeats.length === pairSeatsBefore, `pair group seats ${pairSeatsBefore} → ${pairSeats.length} (duplicate join must not seat anyone again)`);
-  ok(new Set(pairSeats.map((m) => m.user_id)).size === pairSeats.length, 'duplicate seats would double-count in the pair group');
-
-  // (b) A demo-group member re-entering through the dev join hook: the group
-  // still has exactly 3 UNIQUE seats (maya keeps one, never a second row).
-  await devMock.getOrSeedDemoGroup(MAYA_ID);
-  const seats = await devMock.getGroupMembers(DEV_DEMO_GROUP_ID);
-  ok(seats.length === 3, `demo group seats = ${seats.length} (expected 3)`);
-  ok(new Set(seats.map((m) => m.user_id)).size === 3, 'demo group has no duplicate seats');
-  ok(seats.filter((m) => m.user_id === MAYA_ID).length === 1, 'maya still holds exactly one seat');
-
-  // The real-mode reject message maps to the friendly already-in copy.
-  ok(
-    friendlyAcceptError('you are already in this group') === "You're already in this group — no need to join twice.",
-    `already-in copy: ${friendlyAcceptError('you are already in this group')}`,
-  );
-  console.log(`        repeated joins: no double seats anywhere; already-in copy verified`);
-});
-
 await step('k. Weekly results snapshot: fully-elapsed week finalizes one row, idempotent', async () => {
   // Session is A (restored at the end of step j). A is re-paired with B here.
   const resAuthA4 = await authenticate(A_EMAIL, 'pass1234');
   ok(resAuthA4.ok, `re-auth A (step k) failed: ${resAuthA4.error}`);
   let ctx = await fetchWeeklyContext();
-  ok(ctx.context.hasPartner === true, 'A should be paired before weekly finalize');
+  ok(ctx.ok && ctx.context.members.length === 1, 'A should be paired before weekly finalize');
 
   // Use A's own reported week-start day to stay consistent with the app logic.
   const weekStartDay = ctx.context.weekStartDay;
@@ -617,7 +413,7 @@ await step('l. Miss promise: set (40 chars) → missed previous week → own-mis
   ok(resAuthA5.ok, `re-auth A (step l) failed: ${resAuthA5.error}`);
   const ctx0 = await fetchWeeklyContext();
   ok(ctx0.ok, 'fetchWeeklyContext failed at step l start');
-  ok(ctx0.context.hasPartner === true, 'A should be paired for the miss-promise step');
+  ok(ctx0.ok && ctx0.context.members.length === 1, 'A should be paired for the miss-promise step');
   const weekStartDay = ctx0.context.weekStartDay;
   const goal = ctx0.context.weeklyGoal;
 
@@ -656,7 +452,7 @@ await step('l. Miss promise: set (40 chars) → missed previous week → own-mis
   // 5) Unpair (step-j style) clears the promise with the pair membership.
   const resAuthA6 = await authenticate(A_EMAIL, 'pass1234');
   ok(resAuthA6.ok, `re-auth A (unpair) failed: ${resAuthA6.error}`);
-  const un = await unpair();
+  const un = await leaveGroup();
   ok(un.ok, `unpair failed: ${un.error}`);
   ok((await devMock.getMissPromise(userA.id)) === null, 'miss promise should clear on unpair (devMock)');
   ok((await getMissPromise()) === null, 'getter should return null after unpair');
@@ -682,8 +478,8 @@ await step('m. Partner MissCard: B missed last week + B promise → A feed card 
   const resAuthA7 = await authenticate(A_EMAIL, 'pass1234');
   ok(resAuthA7.ok, `re-auth A (post-pair, step m) failed: ${resAuthA7.error}`);
   const ctxM0 = await fetchWeeklyContext();
-  ok(ctxM0.ok && ctxM0.context.hasPartner === true, 'A should be paired at step m start');
-  const partnerId = ctxM0.context.partner?.id;
+  ok(ctxM0.ok && ctxM0.context.members.length === 1, 'A should be paired at step m start');
+  const partnerId = ctxM0.context.members[0]?.id ?? undefined;
   ok(partnerId === userB.id, `partner id = ${partnerId} (expected B)`);
 
   // 1) B sets their OWN promise (the M card surfaces the PARTNER's note).
@@ -934,7 +730,7 @@ await step('o. Push dispatch engine: partner_logged row+dedupe, quiet-hours unit
   // Unpair A (both sides solo) — invite rows in devMock survive unpair (real
   // unpair keeps the invites row; accepted flips status). We need a FRESH
   // pending invite: clear the stored invite ref and regenerate.
-  const unRes = await unpair();
+  const unRes = await leaveGroup();
   ok(unRes.ok, `unpair (step o) failed: ${unRes.error}`);
   const stateAfter = await devMock.getPairState(uidA);
   ok(stateAfter.accepted === false, 'A should be solo after unpair');
@@ -1042,8 +838,10 @@ await step('p. Push copy EXACT strings + partner_logged fires from logWorkout; i
   await devMock.clearPushDeliveries(uidB);
   const { File, _root, _ensureFile } = fsMod;
   const shotP = new File(path.join(_root, RUN_ID, 'fake-shot-p.jpg'));
+  const envP = new File(path.join(_root, RUN_ID, 'fake-env-p.jpg'));
   _ensureFile(shotP);
-  const resLog = await logWorkout({ photoUri: shotP.uri, workoutType: 'Lift' });
+  _ensureFile(envP);
+  const resLog = await logWorkout({ photoUri: shotP.uri, photoEnvUri: envP.uri, workoutType: 'Lift' });
   ok(resLog.ok, `logWorkout (step p) failed: ${resLog.error}`);
   await tick(); // let the fire-and-forget notifyPartnerLogged flush
   const plRows = await pushDeliveries(uidB);
@@ -1075,7 +873,7 @@ await step('p. Push copy EXACT strings + partner_logged fires from logWorkout; i
   ok(resAuthBip.ok, `re-auth B (accept, step p) failed: ${resAuthBip.error}`);
   // B is currently paired with A (step o re-paired). Accepting a NEW A code
   // while already paired would error — unpair B first for a clean accept.
-  const unP = await unpair();
+  const unP = await leaveGroup();
   ok(unP.ok, `unpair B (step p) failed: ${unP.error}`);
   const accP = await acceptInvite(freshP.displayCode);
   ok(accP.ok, `acceptInvite (step p) failed: ${accP.error}`);
@@ -1111,7 +909,7 @@ await step('q. Week recap: elapsed-week A 2/goal + B 3/goal snapshots → both e
   const uidA = userA.id;
   const uidB = userB.id;
   const ctxQ0 = await fetchWeeklyContext();
-  ok(ctxQ0.ok && ctxQ0.context.hasPartner === true, 'A should be paired at step q start');
+  ok(ctxQ0.ok && ctxQ0.context.members.length === 1, 'A should be paired at step q start');
   // Fixture a FULLY-ELAPSED week for A's own week-start day (A onboarded Wed:
   // previousWeekRange(real-now, 'Wed') = [Wed Aug 26, Wed Sep 2)). The direct
   // weeklyResults helper is the range authority — clear both sides' snapshots
@@ -1218,10 +1016,10 @@ await step('q. Week recap: elapsed-week A 2/goal + B 3/goal snapshots → both e
   const fallbackRecap = await getRecapForLastCompletedWeek(new Date());
   ok(fallbackRecap !== null && fallbackRecap.own.count === 2, `fallback recap own count = ${fallbackRecap?.own.count} (expected 2 computed logs)`);
   // 6) Solo user gets own-only: unpair, then the recap has partner === null.
-  const unQ = await unpair();
+  const unQ = await leaveGroup();
   ok(unQ.ok, `unpair (step q) failed: ${unQ.error}`);
   const soloCtx = await fetchWeeklyContext();
-  ok(soloCtx.ok && soloCtx.context.hasPartner === false, 'A should be solo after unpair');
+  ok(soloCtx.ok && soloCtx.context.members.length === 0, 'A should be solo after unpair');
   const soloRecap = await getRecapForLastCompletedWeek(new Date());
   ok(soloRecap !== null && soloRecap.partner === null && soloRecap.partnerId === null, 'solo recap must be own-only (partner null)');
   ok(soloRecap.own.count === 2, `solo recap own count = ${soloRecap.own.count} (expected 2)`);
@@ -1235,8 +1033,210 @@ await step('q. Week recap: elapsed-week A 2/goal + B 3/goal snapshots → both e
   const accQ = await acceptInvite(freshQ.displayCode);
   ok(accQ.ok, `re-pair accept (step q) failed: ${accQ.error}`);
   const ctxQPair = await fetchWeeklyContext();
-  ok(ctxQPair.ok && ctxQPair.context.hasPartner === true, 'A+B should be re-paired at step q end');
+  ok(ctxQPair.ok && ctxQPair.context.members.length === 1, 'A+B should be re-paired at step q end');
   console.log(`        A 2/3 + B 3/3 snapshots → both exposed; dismiss persists; next week re-arms; fallback works; solo own-only; re-paired`);
+});
+
+await step('r. 3-member demo group: crew sees 3 members (names + pet names) + creator id', async () => {
+  // S6: the demo email seeds its group at signup (devMock.createUser hook).
+  const res = await authenticate(CREW_EMAIL, 'pass1234');
+  ok(res.ok, `crew authenticate failed: ${res.error}`);
+  userCrew = await devMock.getUserById(await currentUserId());
+  ok(userCrew && userCrew.email === CREW_EMAIL, 'crew session not created');
+  const commit = await commitOnboarding({ weeklyGoal: 4, weekStart: 'Mon' });
+  ok(commit.ok, `crew commitOnboarding failed: ${commit.error}`);
+
+  // The group is a real 3-seat group: crew + Maya + Jules.
+  const seats = await devMock.getGroupMembers(DEV_DEMO_GROUP_ID);
+  ok(seats.length === 3, `demo group seats = ${seats.length} (expected 3)`);
+  ok(seats.some((m) => m.user_id === userCrew.id), 'crew seat missing');
+  ok(seats.some((m) => m.user_id === MAYA_ID) && seats.some((m) => m.user_id === JULES_ID), 'Maya/Jules seats missing');
+
+  const ctx = await fetchWeeklyContext();
+  ok(ctx.ok, `crew fetchWeeklyContext failed: ${ctx.error}`);
+
+  // Context members = co-members (excludes self): Maya + Jules, with the
+  // creator's local pet names (Coach/Stretch) overriding their real names.
+  const maya = ctx.context.members.find((m) => m.id === MAYA_ID);
+  const jules = ctx.context.members.find((m) => m.id === JULES_ID);
+  ok(ctx.context.members.length === 2, `crew co-members = ${ctx.context.members.length} (expected 2)`);
+  ok(maya && maya.firstName === 'Maya', `maya firstName = ${maya?.firstName} (real name kept)`);
+  ok(maya && maya.displayName === 'Coach', `maya displayName = ${maya?.displayName} (pet name Coach)`);
+  ok(maya && maya.displayName !== maya.firstName, 'pet name should override the real name for the creator');
+  ok(jules && jules.firstName === 'Jules', `jules firstName = ${jules?.firstName} (real name kept)`);
+  ok(jules && jules.displayName === 'Stretch', `jules displayName = ${jules?.displayName} (pet name Stretch)`);
+
+  // Creator info + shared team name.
+  ok(ctx.context.groupCreatorId === userCrew.id, `groupCreatorId = ${ctx.context.groupCreatorId} (expected crew)`);
+  ok(ctx.context.teamName === DEV_DEMO_TEAM_NAME, `teamName = ${ctx.context.teamName} (expected Crew Volt)`);
+  // ProfileScreen caption branch (the screen's exact condition): the creator
+  // gets the editable team-name field (S6 read-only follow-up).
+  ok(ctx.context.groupCreatorId === userCrew.id, 'creator branch: team name editable');
+  console.log(`        group ${DEV_DEMO_GROUP_ID}: crew + Maya + Jules, team "${DEV_DEMO_TEAM_NAME}"`);
+});
+
+await step('s. Feed + ring in a group: all members\u2019 logs visible, ring counts OWN only (crew 2 / Maya 1 / Jules 0)', async () => {
+  // Session is still crew (from step k).
+  const ctx = await fetchWeeklyContext();
+  ok(ctx.ok, `crew fetchWeeklyContext failed: ${ctx.error}`);
+
+  // The weekly feed merges every member's logs: crew 2, Maya 1 (Cycle), Jules 0.
+  const byAuthor = {};
+  for (const l of ctx.context.logs) byAuthor[l.userId] = (byAuthor[l.userId] ?? 0) + 1;
+  ok(ctx.context.logs.length === 3, `feed logs = ${ctx.context.logs.length} (expected 3)`);
+  ok(byAuthor[userCrew.id] === 2, `crew logs = ${byAuthor[userCrew.id]} (expected 2)`);
+  ok(byAuthor[MAYA_ID] === 1, `maya logs = ${byAuthor[MAYA_ID]} (expected 1)`);
+  ok(!(JULES_ID in byAuthor), 'jules should have 0 logs in the feed');
+  const mayaLog = ctx.context.logs.find((l) => l.userId === MAYA_ID && l.workoutType === 'Cycle');
+  ok(mayaLog, 'Maya\u2019s Cycle log missing from the shared feed');
+  ok(mayaLog.authorName === 'Coach', `Maya feed author = ${mayaLog.authorName} (pet name Coach in crew's view)`);
+
+  // Ring = the viewer's OWN logs only (product law): crew's ring is 2/4, never
+  // 3 (Maya's log must not count toward crew's ring).
+  const own = byAuthor[userCrew.id];
+  ok(own === 2, `crew own count = ${own} (expected 2)`);
+  ok(own < ctx.context.logs.length, 'crew ring must NOT include Maya\u2019s log');
+  const mayaMember = ctx.context.members.find((m) => m.id === MAYA_ID);
+  const julesMember = ctx.context.members.find((m) => m.id === JULES_ID);
+  ok(mayaMember?.hasLogs === true && julesMember?.hasLogs === false, 'hasLogs must reflect member log presence');
+  console.log(`        feed 3 logs (crew 2, Maya 1), ring own=2 — Maya's log visible but not ring-counted`);
+});
+
+await step('t. Non-creator (maya) view: creator id \u2260 self + read-only team-name caption branch', async () => {
+  const res = await authenticate(MAYA_EMAIL, 'pass5678');
+  ok(res.ok, `maya authenticate failed: ${res.error}`);
+  const mayaUser = await devMock.getUserById(await currentUserId());
+  ok(mayaUser && mayaUser.id === MAYA_ID, `maya session = ${mayaUser?.id} (expected dev_member_maya)`);
+
+  const ctx = await fetchWeeklyContext();
+  ok(ctx.ok, `maya fetchWeeklyContext failed: ${ctx.error}`);
+  ok(ctx.context.members.length === 2, `maya co-members = ${ctx.context.members.length} (expected 2)`);
+  const memberIds = ctx.context.members.map((m) => m.id).sort();
+  ok(memberIds.includes(userCrew.id) && memberIds.includes(JULES_ID), 'maya should see crew + Jules');
+
+  // Creator info: the group creator is crew, NOT maya.
+  ok(ctx.context.groupCreatorId === userCrew.id, `maya groupCreatorId = ${ctx.context.groupCreatorId} (expected crew)`);
+  ok(ctx.context.groupCreatorId !== mayaUser.id, 'maya is NOT the group creator');
+
+  // ProfileScreen caption logic (asserted via the context, exactly the screen's
+  // condition): non-creator → read-only team-name field + the verbatim caption
+  // "Only the person who started the group can change its name."
+  const isCreator = ctx.context.groupCreatorId === mayaUser.id;
+  ok(isCreator === false, 'non-creator must take the read-only team-name branch');
+
+  // Pet names stay LOCAL to the creator: maya sees Jules' real name, never
+  // crew's "Stretch" nickname; crew's own name renders as its real 'crew'.
+  const julesForMaya = ctx.context.members.find((m) => m.id === JULES_ID);
+  const crewForMaya = ctx.context.members.find((m) => m.id === userCrew.id);
+  ok(julesForMaya && julesForMaya.displayName === 'Jules', `jules for maya = ${julesForMaya?.displayName} (pet names are creator-local)`);
+  ok(crewForMaya && crewForMaya.displayName === crewForMaya.firstName && crewForMaya.firstName.length > 0, 'crew shows its real name to maya');
+  console.log(`        maya: creator=${userCrew.email}, read-only team-name branch (pet names not shared)`);
+});
+
+await step('u. Solo user (any other dev email): groupCreatorId null, zero co-members', async () => {
+  const res = await authenticate(SOLO_EMAIL, 'pass1234');
+  ok(res.ok, `solo authenticate failed: ${res.error}`);
+  await commitOnboarding({ weeklyGoal: 3, weekStart: 'Mon' });
+  const ctx = await fetchWeeklyContext();
+  ok(ctx.ok, `solo fetchWeeklyContext failed: ${ctx.error}`);
+  // Solo → no shared group: members.length 0 and groupCreatorId null (the
+  // paired single-co-member case — members.length 1 — is covered by steps h/i).
+  ok(ctx.context.members.length === 0, `solo co-members = ${ctx.context.members.length} (expected 0)`);
+  ok(ctx.context.groupCreatorId === null, `solo groupCreatorId = ${ctx.context.groupCreatorId} (expected null)`);
+  ok(ctx.context.teamName === null, 'solo teamName should be null');
+  console.log(`        solo: members 0, creator null — invite banner path unchanged`);
+});
+
+await step('v. Capacity guard: a 4th joiner can never seat into the full (3/3) demo group', async () => {
+  // Crew (creator) issues the code the 4th user will try. Clear the persisted
+  // invite ref first — it currently points at A's fresh code from step j — so
+  // crew's code is crew-owned and unique.
+  await removeItem('spotter.invite:v1');
+  const resCrew = await authenticate(CREW_EMAIL, 'pass1234');
+  ok(resCrew.ok, `crew re-auth failed: ${resCrew.error}`);
+  const crewCode = await getOrCreateInviteCode();
+  ok(crewCode.isDev, 'expected dev invite for crew');
+  crewInvite = crewCode;
+
+  // (a) Direct seat attempt through the dev join hook: getOrSeedDemoGroup is a
+  // no-op once the group exists — a 4th user can never be seeded in.
+  const resZoe = await authenticate(ZOE_EMAIL, 'pass1234');
+  ok(resZoe.ok, `zoe authenticate failed: ${resZoe.error}`);
+  userZoe = await devMock.getUserById(await currentUserId());
+  ok(userZoe && userZoe.email === ZOE_EMAIL, 'zoe session not created');
+  await devMock.getOrSeedDemoGroup(userZoe.id);
+  let seats = await devMock.getGroupMembers(DEV_DEMO_GROUP_ID);
+  ok(seats.length === 3, `demo group seats = ${seats.length} (expected 3 — cap never exceeded)`);
+  ok(!seats.some((m) => m.user_id === userZoe.id), 'zoe must not hold a demo-group seat');
+
+  // (b) App-flow join attempt: accepting crew's code routes zoe into the dev
+  // PAIR group (the dev accept path never seats anyone into the full demo
+  // group) — the dev-store mirror of live join_group raising 'this group is
+  // full' (run_smoke.py f8_cap_reject asserts that HTTP 400, untouched here).
+  // NOTE: DEV_PAIR_GROUP_ID is one shared pair-group id for the whole dev
+  // store — A+B (re-paired in step j) already hold seats there — so assert the
+  // deltas, not absolute seats.
+  const info = await lookupInvite(crewCode.displayCode);
+  ok(info.found, 'crew code should resolve for zoe');
+  const pairSeatsBefore = (await devMock.getGroupMembers(DEV_PAIR_GROUP_ID)).length;
+  const acc = await acceptInvite(crewCode.displayCode);
+  ok(acc.ok, `zoe accept failed: ${acc.error}`);
+  seats = await devMock.getGroupMembers(DEV_DEMO_GROUP_ID);
+  ok(seats.length === 3, `demo group seats after join = ${seats.length} (still 3/3)`);
+  const zoeMems = await devMock.getDevMemberships(userZoe.id);
+  ok(!zoeMems.some((m) => m.group_id === DEV_DEMO_GROUP_ID), 'zoe must never hold a demo-group seat');
+  ok(zoeMems.filter((m) => m.group_id === DEV_PAIR_GROUP_ID).length === 1, 'zoe holds exactly one seat (her only membership)');
+  ok(
+    (await devMock.getDevMemberships(userCrew.id)).filter((m) => m.group_id === DEV_PAIR_GROUP_ID).length === 1,
+    'crew holds exactly one seat in the pair group',
+  );
+  const pairSeatsAfter = (await devMock.getGroupMembers(DEV_PAIR_GROUP_ID)).length;
+  ok(pairSeatsAfter === pairSeatsBefore + 2, `pair group grew by exactly zoe+crew (${pairSeatsBefore} → ${pairSeatsAfter})`);
+  const zoeShared = await devMock.findSharedDevGroup(userZoe.id);
+  ok(zoeShared && zoeShared.group_id === DEV_PAIR_GROUP_ID, `zoe group = ${zoeShared?.group_id} (expected the dev pair group)`);
+  ok(zoeShared && zoeShared.member_ids.includes(userCrew.id), `zoe co-members = ${zoeShared?.member_ids?.join(', ')} (crew among them)`);
+
+  // The real-mode reject message (join_group raise) maps to the exact friendly
+  // copy the Accept screen shows for a full group (groups-copy-spec §2.5).
+  ok(
+    friendlyAcceptError('this group is full') === "This group's full — 3 people max. Start your own group with your code.",
+    `full-group copy: ${friendlyAcceptError('this group is full')}`,
+  );
+  console.log(`        demo stays 3/3; zoe routed to own pair group with crew; full-group copy verified`);
+});
+
+await step('w. Duplicate join: re-entry never double-seats (already-member guard, dev mirror)', async () => {
+  // (a) Zoe re-accepts crew's code — she is already in the dev pair group with
+  // crew. The dev membership upsert must leave exactly ONE seat per user and
+  // never change the group-wide seat count; live join_group raises 'you are
+  // already in this group' (run_smoke.py f8_dup_b asserts that HTTP 400 —
+  // untouched here).
+  const pairSeatsBefore = (await devMock.getGroupMembers(DEV_PAIR_GROUP_ID)).length;
+  const again = await acceptInvite(crewInvite.displayCode);
+  ok(again.ok, `zoe second accept failed: ${again.error}`);
+  const zoeMems = await devMock.getDevMemberships(userZoe.id);
+  ok(
+    zoeMems.filter((m) => m.group_id === DEV_PAIR_GROUP_ID).length === 1,
+    'zoe must hold exactly ONE pair-group membership (no duplicate seat)',
+  );
+  const pairSeats = await devMock.getGroupMembers(DEV_PAIR_GROUP_ID);
+  ok(pairSeats.length === pairSeatsBefore, `pair group seats ${pairSeatsBefore} → ${pairSeats.length} (duplicate join must not seat anyone again)`);
+  ok(new Set(pairSeats.map((m) => m.user_id)).size === pairSeats.length, 'duplicate seats would double-count in the pair group');
+
+  // (b) A demo-group member re-entering through the dev join hook: the group
+  // still has exactly 3 UNIQUE seats (maya keeps one, never a second row).
+  await devMock.getOrSeedDemoGroup(MAYA_ID);
+  const seats = await devMock.getGroupMembers(DEV_DEMO_GROUP_ID);
+  ok(seats.length === 3, `demo group seats = ${seats.length} (expected 3)`);
+  ok(new Set(seats.map((m) => m.user_id)).size === 3, 'demo group has no duplicate seats');
+  ok(seats.filter((m) => m.user_id === MAYA_ID).length === 1, 'maya still holds exactly one seat');
+
+  // The real-mode reject message maps to the friendly already-in copy.
+  ok(
+    friendlyAcceptError('you are already in this group') === "You're already in this group — no need to join twice.",
+    `already-in copy: ${friendlyAcceptError('you are already in this group')}`,
+  );
+  console.log(`        repeated joins: no double seats anywhere; already-in copy verified`);
 });
 
 console.log('');
