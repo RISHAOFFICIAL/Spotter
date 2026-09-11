@@ -206,8 +206,8 @@ export interface Database {
         Args: { p_other: string };
         Returns: boolean;
       };
-      /** Authenticated: resolve auth.uid()'s pair — { partner_id, pair_group_id } (both null when unpaired). SECURITY DEFINER. */
-      my_pair: {
+      /** Authenticated: resolve auth.uid()'s shared group — { group_id, member_ids (excluding self), member_count } (all null/empty when solo). SECURITY DEFINER. */
+      my_group: {
         Args: Record<PropertyKey, never>;
         Returns: Json;
       };
@@ -216,15 +216,20 @@ export interface Database {
         Args: { p_token: string };
         Returns: Json;
       };
-      /** Authenticated: pair the current auth.uid() with the inviter of this token (one transaction). */
-      accept_invite: {
+      /** Authenticated: join the inviter's current shared group (creates it when the inviter is solo). One transaction. */
+      join_group: {
         Args: { p_token: string };
         Returns: Json;
       };
-      /** Authenticated: unpair the current auth.uid() from their 2-member pair group (both sides return to solo). */
-      unpair: {
+      /** Authenticated: remove the current auth.uid() from their shared group (dissolves at <= 2 seats; reassigns creator). */
+      leave_group: {
         Args: Record<PropertyKey, never>;
         Returns: Json;
+      };
+      /** v1.0 max group size = 3 (you + 2 partners); the future Spotter+ paid tier raises this in one place. */
+      group_capacity: {
+        Args: Record<PropertyKey, never>;
+        Returns: number;
       };
       /** Authenticated only: permanently delete the current auth.uid()'s account + data (App Store 5.1.1(v)). */
       delete_account: {

@@ -32,6 +32,22 @@ export interface WorkoutLog {
   photoUri: string;
 }
 
+/** One co-member of the user's shared group (excludes self). */
+export interface GroupMemberInfo {
+  id: string;
+  /** Member's REAL first name (never the pet name) — used for the Profile
+   * "Nickname for {firstName}" label. */
+  firstName: string;
+  /** The name THIS user sees for this member everywhere it renders — the
+   * optional local per-member "pet name" when set, otherwise the member's
+   * real first name. Local-only (never synced to the member). */
+  displayName: string;
+  /** True when this member has logged at least one workout (feed card). */
+  hasLogs: boolean;
+}
+
+/** Single-partner-era compat view of a member (kept for the existing UI +
+ * dev-mock harness; S4 renames consumers to `members`). */
 export interface PartnerInfo {
   id: string;
   /** Partner's REAL first name (never the pet name) — used for the Profile
@@ -46,23 +62,62 @@ export interface WeeklyContext {
   weekStartDay: string;
   /** Logs this week, newest first (drives the ring fill + badge + feed). */
   logs: WorkoutLog[];
-  /** true when the user has an accepted partner (slice C wires this). */
+  /** true when the user belongs to a shared group (>= 1 co-member). */
   hasPartner: boolean;
-  /** The accepted partner (null when solo). */
+  /**
+   * Co-members (excludes self), ordered by membership created_at asc
+   * (`my_group`'s member_ids order). Empty when solo. The group feed is
+   * exactly own logs + every member's logs.
+   */
+  members: GroupMemberInfo[];
+  /**
+   * @deprecated Single-partner alias of `members[0]` (null when solo).
+   * Kept for the current Home/Profile reads + dev-mock harness until S4
+   * renames the rendered consumers onto `members`.
+   */
   partner: PartnerInfo | null;
   /**
-   * The name THIS user sees for their partner everywhere it renders — the
-   * optional local "pet name" when set, otherwise the partner's real first
-   * name. Null when solo. Local-only (never synced to the partner).
+   * @deprecated Alias of `members[0]?.displayName` (null when solo).
    */
   partnerDisplayName: string | null;
   /**
-   * Optional shared pair team name (e.g. "Team Us"). Null when unset OR solo.
-   * When set, the feed header shows this instead of "Paired with {name}".
+   * Optional shared group team name (e.g. "Team Us"). Null when unset OR solo.
+   * When set, the feed header shows this instead of "With {names}".
    */
   teamName: string | null;
   /** Week already ended AND goal missed (ring turns danger red only then). */
   weekEndedUnmet: boolean;
+}
+
+/** Parsed shape of the SECURITY DEFINER `my_group()` RPC (schema.sql). */
+export interface MyGroupResult {
+  /** The caller's shared group id (>= 2 members), null when solo. */
+  group_id: string | null;
+  /** Co-member ids EXCLUDING self, ordered by membership created_at asc. */
+  member_ids: string[];
+  /** Number of co-members (0 when solo). */
+  member_count: number;
+}
+
+/**
+ * Normalize the jsonb `my_group()` return (supabase-js can surface jsonb as a
+ * parsed object or a JSON string depending on transport) into a typed shape.
+ * Shared by workoutStore (feed discovery) and naming (team-name write target).
+ */
+export function parseMyGroup(data: unknown): MyGroupResult {
+  const raw = (typeof data === 'string' ? (JSON.parse(data || '{}') as unknown) : data) as {
+    group_id?: string | null;
+    member_ids?: unknown;
+    member_count?: number;
+  } | null;
+  const memberIds = Array.isArray(raw?.member_ids)
+    ? raw.member_ids.filter((x): x is string => typeof x === 'string')
+    : [];
+  return {
+    group_id: raw?.group_id ?? null,
+    member_ids: memberIds,
+    member_count: raw?.member_count ?? memberIds.length,
+  };
 }
 
 const DAY_INDEX: Record<string, number> = {
