@@ -186,7 +186,7 @@ export function FeedCard({ log, now }: { log: WorkoutLog; now: Date }) {
             </View>
           )}
           <Pressable accessibilityRole="button" accessibilityLabel="Close photo" onPress={() => setViewerOpen(false)} style={styles.viewerClose}>
-            <Ionicons name="close" size={22} color={colors.text.primary.hex} />
+            <Ionicons name="close" size={22} color="#FFFFFF" />
           </Pressable>
         </View>
       </Modal>
@@ -199,7 +199,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background.surface.hex,
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: 'rgba(0,0,0,0.08)',
     padding: spacing.md,
     shadowColor: '#000',
     shadowOpacity: 0.35,

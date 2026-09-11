@@ -53,7 +53,7 @@ export function AppButton({
           borderRadius: cfg.radius,
           backgroundColor: bg,
           borderWidth: 'border' in cfg ? 1 : 0,
-          borderColor: 'border' in cfg ? 'rgba(255,255,255,0.12)' : undefined,
+          borderColor: 'border' in cfg ? 'rgba(0,0,0,0.12)' : undefined,
           shadowColor: isPrimary ? '#C6F135' : undefined,
           shadowOpacity: isPrimary && !disabled ? 0.25 : 0,
           shadowOffset: isPrimary && !disabled ? { width: 0, height: 4 } : undefined,
@@ -113,7 +113,7 @@ export function ProgressBar({ fraction }: { fraction: number }) {
       style={{
         height: 2,
         width: '100%',
-        backgroundColor: 'rgba(255,255,255,0.10)',
+        backgroundColor: 'rgba(0,0,0,0.12)',
         borderRadius: radius.pill,
       }}
     >

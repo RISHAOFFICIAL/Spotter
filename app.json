@@ -6,8 +6,8 @@
     "orientation": "portrait",
     "icon": "./assets/branding/icon-source.png",
     "scheme": "spotter",
-    "userInterfaceStyle": "dark",
-    "backgroundColor": "#0A0C08",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#F4F5EE",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "app.spotter.mvp",

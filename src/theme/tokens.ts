@@ -5,42 +5,42 @@
 
 export const meta = {
   appName: 'SPOTTER',
-  theme: 'dark (default)',
+  theme: 'light (default)',
   platforms: 'React Native + Expo, iOS + Android',
-  updated: '2026-09-02',
+  updated: '2026-09-11',
 };
 
 export const colors = {
   background: {
     base: {
-      hex: '#0a0c08',
-      rgba: 'rgba(10, 12, 8, 1)',
-      use: 'app background, deepest layer',
+      hex: '#f4f5ee',
+      rgba: 'rgba(244, 245, 238, 1)',
+      use: 'app background, deepest layer (paper)',
     },
     surface: {
-      hex: '#131610',
-      rgba: 'rgba(19, 22, 16, 1)',
-      use: 'cards, feed items, bottom bar',
+      hex: '#ffffff',
+      rgba: 'rgba(255, 255, 255, 1)',
+      use: 'cards, feed items, bottom bar (white)',
     },
     raised: {
-      hex: '#1b1f15',
-      rgba: 'rgba(27, 31, 21, 1)',
-      use: 'headers, sheet body, button wells',
+      hex: '#e9ecdb',
+      rgba: 'rgba(233, 236, 219, 1)',
+      use: 'headers, sheet body, button wells (light raised)',
     },
     overlay: {
-      hex: '#23281b',
-      rgba: 'rgba(35, 40, 27, 1)',
-      use: 'pressed states, input fill',
+      hex: '#e5e8d4',
+      rgba: 'rgba(229, 232, 212, 1)',
+      use: 'pressed states, input fill (darker paper)',
     },
     scrim: {
-      hex: '#0a0c08',
-      rgba: 'rgba(10, 12, 8, 0.72)',
-      use: 'modal/sheet backdrop',
+      hex: '#14180c',
+      rgba: 'rgba(20, 24, 12, 0.55)',
+      use: 'modal/sheet backdrop on light',
     },
     hairline: {
-      hex: '#ffffff',
-      rgba: 'rgba(255, 255, 255, 0.08)',
-      use: '1px borders/dividers on dark',
+      hex: '#000000',
+      rgba: 'rgba(0, 0, 0, 0.08)',
+      use: '1px borders/dividers on light',
     },
   },
   brand: {
@@ -67,24 +67,24 @@ export const colors = {
   },
   text: {
     primary: {
-      hex: '#f4f6ee',
-      rgba: 'rgba(244, 246, 238, 1)',
-      use: 'headings, primary content',
+      hex: '#000000',
+      rgba: 'rgba(0, 0, 0, 1)',
+      use: 'headings, primary content (pure black — owner)',
     },
     secondary: {
-      hex: '#a9b09b',
-      rgba: 'rgba(169, 176, 155, 1)',
-      use: 'body, sublabels',
+      hex: '#262b1e',
+      rgba: 'rgba(38, 43, 30, 1)',
+      use: 'body, sublabels (dark, clearly readable)',
     },
     muted: {
-      hex: '#6c7360',
-      rgba: 'rgba(108, 115, 96, 1)',
-      use: 'timestamps, helper text, disabled',
+      hex: '#2f3528',
+      rgba: 'rgba(47, 53, 40, 1)',
+      use: 'timestamps, helper text, disabled (never faint)',
     },
     danger: {
       hex: '#ff5a5f',
       rgba: 'rgba(255, 90, 95, 1)',
-      use: 'missed goal, destructive copy',
+      use: 'missed goal, destructive copy (reads on white)',
     },
     onVolt: {
       hex: '#121408',
@@ -96,7 +96,7 @@ export const colors = {
     success: {
       hex: '#c6f135',
       rgba: 'rgba(198, 241, 53, 1)',
-      use: 'ring fill, logged-ok, on-track states',
+      use: 'ring fill, logged-ok, on-track states (volt)',
     },
     warning: {
       hex: '#ffb454',
@@ -109,9 +109,9 @@ export const colors = {
       use: 'missed goal (ring missed state, red banner)',
     },
     trackInactive: {
-      hex: '#ffffff',
-      rgba: 'rgba(255, 255, 255, 0.10)',
-      use: 'inactive weekly-ring track',
+      hex: '#000000',
+      rgba: 'rgba(0, 0, 0, 0.12)',
+      use: 'inactive weekly-ring track on light',
     },
   },
   reaction: {
@@ -242,8 +242,8 @@ export const weeklyRing = {
   trackStroke: 4,
   progressStroke: 12,
   lineCap: 'round',
-  trackColor: '#FFFFFF',
-  trackColorAlpha: 0.1,
+  trackColor: '#000000',
+  trackColorAlpha: 0.12,
   progressColor: '#C6F135',
   progressMissedColor: '#FF5A5F',
   glowShadow: '0px 0px 20px rgba(198, 241, 53, 0.30)',
@@ -252,12 +252,12 @@ export const weeklyRing = {
   numeral: {
     text: 'N/7',
     type: 'ringNumber',
-    color: '#F4F6EE',
+    color: '#000000',
   },
   label: {
     text: 'DAYS THIS WEEK',
     type: 'label',
-    color: '#A9B09B',
+    color: '#262B1E',
   },
 };
 
@@ -265,8 +265,8 @@ export const cameraButton = {
   tapTarget: 80,
   visualDiameter: 72,
   strokeOuter: 4,
-  strokeOuterColor: '#FFFFFF',
-  strokeOuterAlpha: 0.85,
+  strokeOuterColor: '#000000',
+  strokeOuterAlpha: 0.12,
   fill: '#C6F135',
   lensDiameter: 30,
   lensColor: '#FFFFFF',
@@ -281,7 +281,7 @@ export const cameraButton = {
       y: -2,
     },
     background: '#C6F135',
-    border: '1px solid #0A0C08',
+    border: '1px solid rgba(0,0,0,0.12)',
     text: {
       type: 'captionStrong',
       size: 12,
@@ -307,11 +307,11 @@ export const buttons = {
   secondary: {
     height: 52,
     radius: 16,
-    background: '#1B1F15',
-    border: '1px solid rgba(255,255,255,0.12)',
+    background: '#E9ECDB',
+    border: '1px solid rgba(0,0,0,0.12)',
     label: {
       type: 'captionStrong',
-      color: '#F4F6EE',
+      color: '#000000',
     },
   },
   ghost: {
@@ -320,17 +320,17 @@ export const buttons = {
     background: 'transparent',
     label: {
       type: 'captionStrong',
-      color: '#A9B09B',
+      color: '#262B1E',
     },
   },
   chip: {
     height: 36,
     radius: 18,
-    background: '#1B1F15',
+    background: '#E9ECDB',
     selectedBackground: '#C6F135',
     selectedLabel: '#121408',
-    unselectedLabel: '#F4F6EE',
-    border: '1px solid rgba(255,255,255,0.10)',
+    unselectedLabel: '#000000',
+    border: '1px solid rgba(0,0,0,0.12)',
     gap: 8,
   },
 };
@@ -338,15 +338,15 @@ export const buttons = {
 export const statusColors = {
   loggedOk: {
     dot: '#C6F135',
-    label: '#A9B09B',
+    label: '#262B1E',
   },
   missed: {
     dot: '#FF5A5F',
     label: '#FF5A5F',
   },
   pending: {
-    dot: '#6C7360',
-    label: '#6C7360',
+    dot: '#2F3528',
+    label: '#2F3528',
   },
 };
 

@@ -211,7 +211,7 @@ export function MissSetupSheet({
 }
 
 const styles = StyleSheet.create({
-  scrim: { flex: 1, backgroundColor: 'rgba(10,12,8,0.72)' },
+  scrim: { flex: 1, backgroundColor: 'rgba(20,24,12,0.55)' },
   sheet: {
     backgroundColor: colors.background.surface.hex,
     borderTopLeftRadius: radius.sheetTop,
@@ -223,7 +223,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 4,
     borderRadius: radius.pill,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(0,0,0,0.12)',
     alignSelf: 'center',
   },
   close: { position: 'absolute', top: spacing.md, right: spacing.md, width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
@@ -236,7 +236,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.14)',
+    borderColor: 'rgba(0,0,0,0.14)',
     backgroundColor: colors.background.overlay.hex,
   },
   choiceSelected: {
@@ -248,7 +248,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     backgroundColor: colors.background.overlay.hex,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
+    borderColor: 'rgba(0,0,0,0.12)',
     paddingHorizontal: spacing.lg,
     color: colors.text.primary.hex,
     fontSize: 16,

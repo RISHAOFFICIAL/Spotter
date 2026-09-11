@@ -1,7 +1,8 @@
 /**
  * Root layout — gate everything behind AuthProvider and route by auth state.
- * Dark theme only (tokens). Splash: native splash (branded, base bg) covers
- * first paint; while JS boots we render a matching base-color View.
+ * Light theme only (tokens; black text on light surfaces). Splash: native
+ * splash (branded, base bg) covers first paint; while JS boots we render a
+ * matching base-color View.
  */
 import React from 'react';
 import { Stack, type NativeStackNavigationOptions } from 'expo-router';
@@ -10,7 +11,7 @@ import { StatusBar } from 'expo-status-bar';
 import { AuthProvider, SplashLoading, useAuth } from '@/features/auth/AuthProvider';
 import { colors } from '@/theme/tokens';
 
-// Base background for every screen's content area (dark theme only). The
+// Base background for every screen's content area (light theme only). The
 // inline object literal loses `backgroundColor` through RN 0.86's strict-api
 // prop typing, so it is pinned via the stack's own option type with a
 // targeted cast (no `any`, no loosened globals; value unchanged).
@@ -60,7 +61,7 @@ function Gate() {
 export default function RootLayout() {
   return (
     <AuthProvider>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <Gate />
     </AuthProvider>
   );

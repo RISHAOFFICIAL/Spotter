@@ -234,7 +234,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background.surface.hex,
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: 'rgba(0,0,0,0.08)',
     padding: spacing.lg,
     marginBottom: spacing.sm,
     gap: spacing.sm,
@@ -246,7 +246,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
   },
   chipOpen: { backgroundColor: colors.brand.primary.hex },
-  chipDone: { backgroundColor: colors.background.overlay.hex, borderWidth: 1, borderColor: 'rgba(255,255,255,0.10)' },
+  chipDone: { backgroundColor: colors.background.overlay.hex, borderWidth: 1, borderColor: 'rgba(0,0,0,0.12)' },
   settleRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
   emptyBlock: { alignItems: 'center', paddingTop: spacing.xxxl * 2, gap: spacing.sm, paddingHorizontal: spacing.xl },
 });
