@@ -535,11 +535,14 @@ begin
   end if;
 
   select count(*) into cnt from public.memberships where group_id = gid;
-  if cnt >= public.group_capacity() then raise exception 'this group is full'; end if;
-
+  -- Already-member check FIRST: on a full group, an existing member re-entering
+  -- the code must hear "you are already in this group", not a misleading
+  -- "this group is full". The lock + the memberships insert trigger keep the
+  -- cap airtight regardless of check order.
   if exists (select 1 from public.memberships m where m.group_id = gid and m.user_id = my_id) then
     raise exception 'you are already in this group';  -- idempotent-ish; client can map to a friendly message
   end if;
+  if cnt >= public.group_capacity() then raise exception 'this group is full'; end if;
 
   insert into public.memberships (group_id, user_id, weekly_goal, role)
     values (gid, my_id, 3, 'member');  -- goal 3 until onboarding/Profile upserts their real goal
@@ -640,10 +643,13 @@ drop function if exists public.unpair();
 -- argument, so a user can only ever delete themselves. SECURITY DEFINER so the
 -- function can row-delete auth.users + storage.objects for that uid.
 --
--- Group handling (pair groups AND any future squad groups):
---   * If the deleting user is the LAST member of a group → delete the whole
---     group (only their own data is in it).
---   * Otherwise → KEEP the group for the remaining members: if the deleting
+-- Group handling (pair groups AND any future squad groups) follows the same
+-- invariant as leave_group: a shared group exists iff it has >= 2 members.
+--   * If the deleting user is the LAST or SECOND-LAST member (deleting would
+--     leave <= 1 member) → delete the whole group so no 1-member ghost
+--     singleton survives (only their own data is in it; a survivor returns
+--     to pure solo, exactly as leave_group dissolves a 2-member pair).
+--   * Otherwise (>= 2 members would remain) → KEEP the group: if the deleting
 --     user was the creator, reassign creator_id to the oldest remaining
 --     member FIRST (groups.creator_id references public.users ON DELETE
 --     CASCADE — leaving it would nuke the group + the partner's membership row
@@ -692,10 +698,12 @@ begin
      where bucket_id = 'workouts' and name = my_id::text || '/';
   end if;
 
-  -- Keep partner groups alive unless we are their last member. Iterate the
-  -- groups we are a member of OR creator of (a creator who already left the
-  -- membership must still hand the group over — otherwise the auth.users
-  -- cascade would delete it out from under the remaining members).
+  -- Keep partner groups alive unless we are their last OR second-last member
+  -- (deleting would leave <= 1 member → a ghost singleton, violating the
+  -- "shared group exists iff >= 2 members" invariant that leave_group already
+  -- enforces). Iterate the groups we are a member of OR creator of (a creator
+  -- who already left the membership must still hand the group over — otherwise
+  -- the auth.users cascade would delete it out from under the remaining members).
   for g in
     select distinct group_id from (
       select m.group_id from public.memberships m where m.user_id = my_id
@@ -707,8 +715,10 @@ begin
       from public.memberships m
      where m.group_id = g.group_id;
 
-    if members_left <= 1 then
-      -- We are the last member: the group holds only our data — drop it.
+    if members_left <= 2 then
+      -- We are the last or second-last member: deleting leaves <= 1 member, so
+      -- the group would become a ghost singleton — drop it (same dissolve
+      -- threshold as leave_group; a survivor returns to pure solo).
       delete from public.groups where id = g.group_id;
     else
       -- The group outlives us: if we created it, hand it to the oldest
