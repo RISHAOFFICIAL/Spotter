@@ -1,5 +1,6 @@
 /**
- * Screen 2 — Set weekly goal.
+ * Screen 3 — Set weekly goal (was screen 2; PracticeCamStep inserted ahead of
+ * it in the 2026-09-11 addendum — shell step 3 of 4).
  * 7 chips (values 1-7), preset 3; live micro-preview line
  * "{n} days a week = ring filled by {day}"; Continue = "Next".
  */
@@ -24,7 +25,7 @@ export function GoalStep({ value, onChange, onNext, onSkip, onBack, completionDa
   const chips = [1, 2, 3, 4, 5, 6, 7];
   return (
     <OnboardingScreen
-      step={2}
+      step={3}
       onBack={onBack}
       onSkip={onSkip}
       primaryLabel="Next"

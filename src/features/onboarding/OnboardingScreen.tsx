@@ -1,7 +1,12 @@
 /**
  * Onboarding screen shell: dark base background, safe areas, optional back
- * chevron (22pt secondary), progress bar (2pt volt) and "Skip for now" ghost
- * link (bottom-left, muted per spec).
+ * chevron (22pt secondary), progress bar (2pt volt — 4 segments as of the
+ * 2026-09-11 addendum: Welcome → Practice cam → Goal → Week start) and
+ * "Skip for now" ghost link (bottom-left, muted per spec).
+ *
+ * Back-chevron rule (addendum §3.3): the chevron renders ONLY when `onBack`
+ * is provided — PracticeCamStep has no back route and must not show a dead
+ * chevron; GoalStep/WeekStartStep opt in with a real `onBack`.
  */
 import React from 'react';
 import { Platform, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
@@ -32,7 +37,7 @@ export function OnboardingScreen({
   primaryLoading = false,
   footer,
 }: {
-  step: 1 | 2 | 3;
+  step: 1 | 2 | 3 | 4;
   children: React.ReactNode;
   onBack?: () => void;
   onSkip: () => void;
@@ -49,9 +54,9 @@ export function OnboardingScreen({
       edges={['top', 'bottom', 'left', 'right']}
     >
       <View style={styles.screen}>
-        <ProgressBar fraction={step / 3} />
+        <ProgressBar fraction={step / 4} />
         <View style={styles.headerRow}>
-          {step > 1 ? (
+          {onBack ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Back"

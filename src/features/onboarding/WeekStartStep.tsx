@@ -1,5 +1,6 @@
 /**
- * Screen 3 — Set week start day.
+ * Screen 4 — Set week start day (was screen 3; PracticeCamStep inserted ahead
+ * of GoalStep in the 2026-09-11 addendum — shell step 4 of 4).
  * 7 visible day cells (Mon..Sun), preset Mon, "default" tag under/inside the
  * selected cell only; Finish = "Let's go" -> commit -> Home.
  */
@@ -25,7 +26,7 @@ const DAYS: WeekStartDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 export function WeekStartStep({ value, onChange, onFinish, onSkip, onBack }: Props) {
   return (
     <OnboardingScreen
-      step={3}
+      step={4}
       onBack={onBack}
       onSkip={onSkip}
       primaryLabel="Let's go"

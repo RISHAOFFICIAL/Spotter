@@ -13,7 +13,7 @@
       "bundleIdentifier": "app.spotter.mvp",
       "buildNumber": "1",
       "infoPlist": {
-        "NSCameraUsageDescription": "SPOTTER uses your camera to capture photo proof of your workouts. Photos are sealed to your account — only you and your partner can ever see them."
+        "NSCameraUsageDescription": "SPOTTER uses your camera to capture photo proof of your workouts — a live selfie and a shot of your surroundings. Photos are sealed to your account — only you and your group can ever see them."
       }
     },
     "android": {
