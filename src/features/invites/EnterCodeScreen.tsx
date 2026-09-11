@@ -260,7 +260,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     backgroundColor: colors.background.overlay.hex,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
+    borderColor: 'rgba(0,0,0,0.12)',
     paddingHorizontal: spacing.lg,
     color: colors.text.primary.hex,
     fontSize: 16,

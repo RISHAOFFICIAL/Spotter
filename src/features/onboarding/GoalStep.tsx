@@ -83,7 +83,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     backgroundColor: colors.background.surface.hex,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
+    borderColor: 'rgba(0,0,0,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
   },

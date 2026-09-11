@@ -74,7 +74,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: colors.background.surface.hex,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.08)',
+    borderTopColor: 'rgba(0,0,0,0.08)',
     paddingTop: spacing.sm,
     shadowColor: '#000',
     shadowOpacity: 0.4,

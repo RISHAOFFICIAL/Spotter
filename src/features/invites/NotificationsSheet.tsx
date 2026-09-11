@@ -82,7 +82,7 @@ export function NotificationsSheet({
 }
 
 const styles = StyleSheet.create({
-  scrim: { flex: 1, backgroundColor: 'rgba(10,12,8,0.72)' },
+  scrim: { flex: 1, backgroundColor: 'rgba(20,24,12,0.55)' },
   sheet: {
     backgroundColor: colors.background.surface.hex,
     borderTopLeftRadius: radius.sheetTop,
@@ -94,7 +94,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 4,
     borderRadius: radius.pill,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: 'rgba(0,0,0,0.12)',
     alignSelf: 'center',
   },
   close: { position: 'absolute', top: spacing.md, right: spacing.md, width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },

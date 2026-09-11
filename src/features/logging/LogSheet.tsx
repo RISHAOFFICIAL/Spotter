@@ -249,14 +249,15 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
                 />
               ) : (
                 <View style={styles.cameraFallback}>
-                  <Ionicons name="camera-outline" size={44} color={colors.text.muted.hex} />
-                  <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex, textAlign: 'center' }]}>
+                  {/* Camera surface — stays dark in the light theme; text stays light. */}
+                  <Ionicons name="camera-outline" size={44} color="rgba(255,255,255,0.70)" />
+                  <Text style={[textStyles.caption.style, { color: 'rgba(255,255,255,0.92)', textAlign: 'center' }]}>
                     {isFirstRun
                       ? 'We\u2019ll ask for camera access when you tap the shutter.'
                       : 'Camera access is off.'}
                   </Text>
                   {!isFirstRun && (
-                    <Text style={[textStyles.label.style, { color: colors.text.muted.hex, textAlign: 'center' }]}>
+                    <Text style={[textStyles.label.style, { color: 'rgba(255,255,255,0.70)', textAlign: 'center' }]}>
                       Allow it in Settings to log with photo proof.
                     </Text>
                   )}
@@ -297,7 +298,8 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
               {/* Capture feedback: Snapping… / Filtering… */}
               {processing && (
                 <View style={styles.processingOverlay} pointerEvents="none">
-                  <Text style={[textStyles.label.style, { color: colors.text.primary.hex }]}>
+                  {/* Over the live camera — stays light in the light theme. */}
+                  <Text style={[textStyles.label.style, { color: '#FFFFFF' }]}>
                     {processing === 'filtering' ? 'Filtering…' : 'Snapping…'}
                   </Text>
                 </View>
@@ -525,7 +527,7 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
               onPress={() => setPreview(null)}
               style={styles.previewModalClose}
             >
-              <Ionicons name="close" size={22} color={colors.text.primary.hex} />
+              <Ionicons name="close" size={22} color="#FFFFFF" />
             </Pressable>
           </View>
         </Modal>
@@ -556,7 +558,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  chromeLabel: { color: colors.text.muted.hex, textAlign: 'center' },
+  chromeLabel: {
+    // Over the live camera / black review strip — stays light in the light theme.
+    color: 'rgba(255,255,255,0.92)',
+    textAlign: 'center',
+  },
   liveBadge: {
     position: 'absolute',
     right: spacing.lg,
@@ -588,8 +594,8 @@ const styles = StyleSheet.create({
     gap: 2,
     paddingHorizontal: spacing.lg,
   },
-  cameraHeadline: { color: colors.text.primary.hex, textAlign: 'center' },
-  cameraHelper: { color: colors.text.secondary.hex, textAlign: 'center' },
+  cameraHeadline: { color: '#FFFFFF', textAlign: 'center' },
+  cameraHelper: { color: 'rgba(255,255,255,0.92)', textAlign: 'center' },
   filterTint: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   processingOverlay: {
     position: 'absolute',
@@ -603,7 +609,7 @@ const styles = StyleSheet.create({
   filterBar: {
     backgroundColor: colors.background.surface.hex,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.08)',
+    borderTopColor: 'rgba(0,0,0,0.08)',
     paddingTop: spacing.md,
     paddingHorizontal: spacing.lg,
   },
@@ -617,7 +623,7 @@ const styles = StyleSheet.create({
   bottomBar: {
     backgroundColor: colors.background.surface.hex,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.08)',
+    borderTopColor: 'rgba(0,0,0,0.08)',
     paddingTop: spacing.lg,
     paddingHorizontal: spacing.lg,
     gap: spacing.md,
@@ -702,7 +708,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background.raised.hex,
     borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
+    borderColor: 'rgba(0,0,0,0.12)',
     color: colors.text.primary.hex,
     paddingHorizontal: spacing.md,
     paddingVertical: 10,
@@ -715,7 +721,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     paddingHorizontal: spacing.md + spacing.sm,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
+    borderColor: 'rgba(0,0,0,0.12)',
     backgroundColor: colors.background.raised.hex,
     alignItems: 'center',
     justifyContent: 'center',
@@ -749,8 +755,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   flipCopy: { alignItems: 'center', gap: spacing.xs, paddingHorizontal: spacing.xxxl },
-  flipHeadline: { color: colors.text.primary.hex, textAlign: 'center' },
-  flipHelper: { color: colors.text.muted.hex, textAlign: 'center' },
+  flipHeadline: { color: '#FFFFFF', textAlign: 'center' },
+  flipHelper: { color: 'rgba(255,255,255,0.92)', textAlign: 'center' },
   previewModal: {
     flex: 1,
     backgroundColor: 'rgba(10,12,8,0.96)',
