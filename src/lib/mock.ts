@@ -72,6 +72,12 @@ export const devMock = {
     };
     await writeValue(`user:${email}`, user);
     await writeValue('user', user);
+    // S5: the designated 3-person demo account seeds its full group on first
+    // signup so dev mode can walk a real 3-member group end-to-end. Idempotent
+    // (and a no-op for every other email — the solo/pair paths stay untouched).
+    if (email === DEV_GROUP_DEMO_EMAIL) {
+      await this.getOrSeedDemoGroup(user.id);
+    }
     return user;
   },
   /** Resolve a dev user by id (any user — two-user smoke flow). */
@@ -152,21 +158,22 @@ export const devMock = {
   },
 
   /**
-   * Optional shared pair TEAM NAME (naming feature B). In dev mock there is a
-   * single pair group (DEV_PAIR_GROUP_ID), so the team name is stored under a
-   * group-scoped key — SHARED between both sides (mirrors the real `groups`
-   * table row the pair shares). Null when unset (UI falls back to "Paired
-   * with {partner}").
+   * Optional shared group TEAM NAME (naming feature B). Scoped by group id —
+   * mirrors the real `groups.team_name` column, so the 2-person pair group
+   * (DEV_PAIR_GROUP_ID) and the seeded 3-person demo group (DEV_DEMO_GROUP_ID)
+   * each carry their own name. Null when unset (UI falls back to the member
+   * names). The no-arg call keeps the legacy pair-group default so existing
+   * callers/tests read the pair key without changes.
    */
-  async getTeamName(): Promise<string | null> {
-    return readValue<string>(`teamName:${DEV_PAIR_GROUP_ID}`);
+  async getTeamName(groupId: string = DEV_PAIR_GROUP_ID): Promise<string | null> {
+    return readValue<string>(`teamName:${groupId}`);
   },
-  async saveTeamName(name: string | null): Promise<void> {
+  async saveTeamName(name: string | null, groupId: string = DEV_PAIR_GROUP_ID): Promise<void> {
     const trimmed = name?.trim() ?? '';
     if (trimmed) {
-      await writeValue(`teamName:${DEV_PAIR_GROUP_ID}`, trimmed);
+      await writeValue(`teamName:${groupId}`, trimmed);
     } else {
-      await AsyncStorage.removeItem(`${STORE_PREFIX}teamName:${DEV_PAIR_GROUP_ID}`);
+      await AsyncStorage.removeItem(`${STORE_PREFIX}teamName:${groupId}`);
     }
   },
   /** Wipe ALL dev-mock state (smoke test / demo reset). Not used by the UI. */
@@ -260,6 +267,163 @@ export const devMock = {
   },
 
   /**
+   * All membership rows across EVERY dev user for one group (the dev stand-in
+   * for the real memberships table's group-scoped reads — RLS in real mode
+   * keeps this server-side; the dev store scans the per-user keys).
+   */
+  async getGroupMembers(groupId: string): Promise<DevMembership[]> {
+    const keys = await AsyncStorage.getAllKeys();
+    const rows: DevMembership[] = [];
+    for (const key of keys ?? []) {
+      if (!key.startsWith(`${STORE_PREFIX}memberships:`)) continue;
+      const userRows = (await readValue<DevMembership[]>(key.slice(STORE_PREFIX.length))) ?? [];
+      for (const r of userRows) {
+        if (r.group_id === groupId) rows.push(r);
+      }
+    }
+    return rows;
+  },
+
+  /**
+   * Resolve the CURRENT user's shared dev group (>= 2 members) — the dev mirror
+   * of the real `my_group()` RPC (same "most recent membership wins" rule, so a
+   * user with a leftover personal membership still resolves their pair/group).
+   * Returns the group id, co-member ids in membership order (excludes self) and
+   * ALL membership rows (members, sorted by created_at asc); null when solo.
+   */
+  async findSharedDevGroup(userId: string): Promise<{
+    group_id: string;
+    member_ids: string[];
+    member_count: number;
+    members: DevMembership[];
+  } | null> {
+    const mine = await this.getDevMemberships(userId);
+    const sorted = [...mine].sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
+    for (const m of sorted) {
+      const members = (await this.getGroupMembers(m.group_id)).sort((a, b) =>
+        a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0,
+      );
+      if (members.length >= 2) {
+        const co = members.filter((x) => x.user_id !== userId);
+        return {
+          group_id: m.group_id,
+          member_ids: co.map((x) => x.user_id),
+          member_count: co.length,
+          members,
+        };
+      }
+    }
+    return null;
+  },
+
+  /**
+   * A dev user's display name — their local profile name when set, else their
+   * email prefix (the dev stand-in for `users.name`: the REAL first name, never
+   * a pet name). Used wherever real mode reads users.name (found-screen
+   * inviter name, seed member names). Null when the user does not exist.
+   */
+  async getDisplayName(userId: string): Promise<string | null> {
+    const profile = await this.getProfile(userId);
+    if (profile?.name?.trim()) return profile.name.trim();
+    const user = await this.getUserById(userId);
+    if (!user) return null;
+    return user.email.split('@')[0] || null;
+  },
+
+  /**
+   * S5 multi-member seed: a full 3-person DEV group — you + two fixed co-members
+   * with distinct real first names, a team name, and a realistic workout
+   * history (you 2, Maya 1, Jules 0) so every feed/ring/Profile state is
+   * distinguishable. The seeding user is the group creator (role 'admin',
+   * mirroring groups.creator_id = whoever started the group). The creating
+   * user's local pet-name map is pre-seeded so the pet-name rows render
+   * pre-filled in Profile. Idempotent: once the group exists, re-runs are
+   * no-ops (a user who left the group stays solo — their leave is respected).
+   * The switch is the designated demo email (DEV_GROUP_DEMO_EMAIL) at signup
+   * OR an explicit call by the harness (S6) — every other dev user still gets
+   * the solo/pair paths unchanged.
+   */
+  async getOrSeedDemoGroup(userId: string): Promise<void> {
+    const existing = await this.getGroupMembers(DEV_DEMO_GROUP_ID);
+    if (existing.length > 0) return;
+    const nowMs = Date.now();
+    const iso = (offsetMs: number) => new Date(nowMs - offsetMs).toISOString();
+    const self = await this.getUserById(userId);
+
+    // Two fixed co-members, stored as real dev users so a tester can also sign
+    // in as them (`maya@spotter.test` / `jules@spotter.test`) and see the
+    // non-creator view.
+    const memberB = DEV_DEMO_MEMBER_B;
+    const memberC = DEV_DEMO_MEMBER_C;
+    for (const member of [memberB, memberC]) {
+      await writeValue(`user:${member.email}`, {
+        id: member.id,
+        email: member.email,
+        createdAt: iso(3 * 3600_000),
+      });
+      await writeValue(`profile:${member.id}`, {
+        id: member.id,
+        email: member.email,
+        name: member.name,
+        week_start_day: 'Mon',
+        timezone: 'UTC',
+        weekly_goal: 3,
+        onboarded_at: iso(3 * 3600_000),
+      });
+    }
+
+    // Memberships: creator (you) oldest, then Maya, then Jules — membership
+    // order drives Profile rows + "waiting on…" copy (same as my_group's order).
+    await this.addDevMembership({
+      group_id: DEV_DEMO_GROUP_ID,
+      user_id: userId,
+      weekly_goal: 3,
+      role: 'admin',
+      created_at: iso(3 * 3600_000),
+      updated_at: iso(3 * 3600_000),
+    });
+    for (const member of [memberB, memberC]) {
+      await this.addDevMembership({
+        group_id: DEV_DEMO_GROUP_ID,
+        user_id: member.id,
+        weekly_goal: 3,
+        role: 'member',
+        created_at: iso(2 * 3600_000),
+        updated_at: iso(2 * 3600_000),
+      });
+    }
+
+    // Workout history: you 2, Maya 1, Jules 0 — all < 24h old so every seeded
+    // log is inside the current week for any week-start day (ring/feed states
+    // are distinguishable from the first render).
+    const seededLog = (id: string, uid: string, photo: string, offsetMs: number, workoutType: string | null) => {
+      const t = iso(offsetMs);
+      return { id, user_id: uid, group_id: DEV_DEMO_GROUP_ID, photo_path: photo, logged_at: t, workout_type: workoutType, created_at: t };
+    };
+    await this.saveWorkouts(userId, [
+      seededLog('dev_demo_self_w1', userId, 'mock://dev/run.jpg', 2 * 3600_000, 'Run'),
+      seededLog('dev_demo_self_w2', userId, 'mock://dev/lift.jpg', 20 * 3600_000, 'Lift'),
+    ]);
+    await this.saveWorkouts(memberB.id, [
+      seededLog('dev_demo_maya_w1', memberB.id, 'mock://dev/maya-cycle.jpg', 5 * 3600_000, 'Cycle'),
+    ]);
+
+    // Shared team name + the creating user's local pet names for both members
+    // (same keys naming.ts reads, so they render immediately).
+    await this.saveTeamName(DEV_DEMO_TEAM_NAME, DEV_DEMO_GROUP_ID);
+    if (self) {
+      try {
+        await AsyncStorage.setItem(
+          `spotter.petname:v1:${self.id}`,
+          JSON.stringify({ [memberB.id]: memberB.petName, [memberC.id]: memberC.petName }),
+        );
+      } catch {
+        // Best-effort local preference.
+      }
+    }
+  },
+
+  /**
    * Seed the DEV PARTNER account on first use: a fixed id (deterministic for
    * the demo), a few pre-created workout logs for today (labeled "Dev Partner
    * — preset demo logs"), and their half of the pair membership. Idempotent.
@@ -347,7 +511,10 @@ export const devMock = {
     await this.savePairState(userId, { partner: { id: partnerUser.id, name: partnerName }, accepted: true });
     await this.savePairState(partnerUser.id, { partner: { id: userId, name: selfName }, accepted: true });
     // Pair membership on BOTH sides (inviter keeps their personal group too —
-    // the feed reads the pair group; weekly goal stays per user).
+    // the feed reads the pair group; weekly goal stays per user). The INVITER
+    // is the group creator (role 'admin', mirroring groups.creator_id — real
+    // join_group seats the joiner in the inviter's group, creator unchanged);
+    // the acceptor joins as a member.
     await this.addDevMembership({
       group_id: DEV_PAIR_GROUP_ID,
       user_id: userId,
@@ -360,31 +527,47 @@ export const devMock = {
       group_id: DEV_PAIR_GROUP_ID,
       user_id: partnerUser.id,
       weekly_goal: partnerProfile?.weekly_goal ?? 3,
-      role: 'member',
+      role: 'admin',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
   },
 
   /**
-   * UNPAIR (compliance: a user must be able to stop receiving partner UGC).
-   * Detaches the current dev user from their partner — BOTH sides return to
-   * solo. Removes the pair memberships (only the shared pair group, never any
-   * other membership) and resets both pair states; KEEPS each user's workout
-   * rows (photos stay per-user isolated); clears the shared team name.
+   * UNPAIR / LEAVE GROUP (compliance: a user must be able to stop receiving
+   * member UGC). Resolves the user's CURRENT shared dev group (the same
+   * membership-driven discovery the store uses — a 2-person pair OR the seeded
+   * 3-person demo group) and removes their seat:
+   *   - 2-member group → dissolves (both sides return to solo, memberships +
+   *     pair state removed, the shared team name clears) — mirrors real
+   *     leave_group's dissolve-at-2 rule.
+   *   - ≥3-member group → the group survives; only the leaver's membership +
+   *     pair state go (creator/reassignment handled server-side in real mode;
+   *     the dev group keeps its admin row). Team name survives with the group.
+   * KEEPS the user's own workout rows (photos stay per-user isolated).
    * Idempotent: already-solo → no-op.
    */
   async unpairDev(userId: string): Promise<void> {
-    const state = await this.getPairState(userId);
-    const partnerId = state.partner?.id ?? null;
-    const both = partnerId ? [userId, partnerId] : [userId];
-    for (const uid of both) {
+    const shared = await this.findSharedDevGroup(userId);
+    if (!shared) return;
+    const groupId = shared.group_id;
+    const removeMembership = async (uid: string) => {
       const memberships = await this.getDevMemberships(uid);
-      const kept = memberships.filter((m) => m.group_id !== DEV_PAIR_GROUP_ID);
-      await writeValue(`memberships:${uid}`, kept);
-      await this.savePairState(uid, { partner: null, accepted: false });
+      await writeValue(`memberships:${uid}`, memberships.filter((m) => m.group_id !== groupId));
+    };
+    if (shared.members.length <= 2) {
+      // Dissolve: both members return to solo.
+      const both = [userId, ...shared.members.filter((m) => m.user_id !== userId).map((m) => m.user_id)];
+      for (const uid of both) {
+        await removeMembership(uid);
+        await this.savePairState(uid, { partner: null, accepted: false });
+      }
+      await this.saveTeamName(null, groupId);
+    } else {
+      // Group survives: only the leaver's seat + pair state go.
+      await removeMembership(userId);
+      await this.savePairState(userId, { partner: null, accepted: false });
     }
-    await this.saveTeamName(null);
   },
 };
 
@@ -449,3 +632,29 @@ export function formatDevInviteCode(ref: string): string {
  * so their logs (both pre-seeded here and captured in-app later) merge into
  * the same shared feed. Keeps the pair story honest without a backend. */
 export const DEV_PAIR_GROUP_ID = 'dev-pair-group';
+
+// ---------------------------------------------------------------------------
+// S5: the multi-member DEV demo group — a full 3-person group (you + 2 fixed
+// co-members) so dev mode behaves like a real group end-to-end. Seeded by
+// `devMock.getOrSeedDemoGroup(userId)`, which the designated demo email
+// (`crew@spotter.test`) triggers at signup; every other dev email keeps the
+// solo/pair paths unchanged. See the method doc for the full shape.
+// ---------------------------------------------------------------------------
+
+/** The 3-person demo group's id (distinct from the 2-person pair group). */
+export const DEV_DEMO_GROUP_ID = 'dev-demo-group';
+
+/** Signing up with this email in dev mode seeds the full 3-person demo group
+ * (the switch — "separate dev user"). */
+export const DEV_GROUP_DEMO_EMAIL = 'crew@spotter.test';
+
+/** Seeded co-members: real first names Maya & Jules, distinct pet names for the
+ * creating user's local map. Fixed ids (like the preset partner) so the demo is
+ * deterministic; both are stored as real dev users, so signing in as
+ * `maya@spotter.test` / `jules@spotter.test` shows the co-member (non-creator)
+ * view. */
+const DEV_DEMO_MEMBER_B = { id: 'dev_member_maya', email: 'maya@spotter.test', name: 'Maya', petName: 'Coach' };
+const DEV_DEMO_MEMBER_C = { id: 'dev_member_jules', email: 'jules@spotter.test', name: 'Jules', petName: 'Stretch' };
+
+/** The seeded demo group's shared team name (feed header + Profile). */
+export const DEV_DEMO_TEAM_NAME = 'Crew Volt';
