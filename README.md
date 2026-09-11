@@ -58,11 +58,15 @@ minimal, no invented features.
 
 ## Onboarding (under 60s comfortable path)
 
-Welcome → Set weekly goal (1–7 chips, preset **3**) → Week-start day (Mon..Sun,
-preset **Mon**) → Home. Skip/back per spec; commit happens only on “Let's go”
-or “Skip for now” (kill mid-flow re-enters at the same step). Camera permission
-is **never** requested during onboarding (app.json only declares the usage
-string; it's requested on the first real camera tap in slice B).
+Welcome (**solo-first**: “Start on your own. Bring your crew in anytime.”) →
+Practice cam (two-shot dry run — `PracticeCamStep`, in-memory only, nothing
+saved/posted) → Set weekly goal (1–7 chips, preset **3**) → Week-start day
+(Mon..Sun, preset **Mon**) → Home. The progress bar has 4 segments. Skip/back
+per spec; commit happens only on “Let's go” or “Skip for now” (kill mid-flow
+re-enters at the same step). Camera permission is requested ONCE on the
+practice step (contextual card → OS prompt; one permission covers both lenses)
+— the real LogSheet re-asks only if it was skipped/denied (app.json declares
+the usage string). Practice captures are discarded on leave, never uploaded.
 
 ## Design tokens — keep them in sync
 

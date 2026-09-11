@@ -1,5 +1,8 @@
 /**
- * Welcome screen — Screen 1 of onboarding.
+ * Welcome screen — Screen 1 of onboarding (solo-first frame, addendum §1).
+ * Headline/subhead/privacy line per onboarding-copy-addendum §1 (STAR strings,
+ * group-swapped): "Start on your own. Bring your crew in anytime." etc. The
+ * user can start right now and bring people in later — no invite gate.
  * Layout per onboarding.md: wordmark (24pt/800 centered), hero illustration,
  * headline (display 32), subhead (body/secondary), privacy promise line with
  * 14pt shield-check (volt) left of it, then "Get started" primary CTA.
@@ -120,15 +123,15 @@ export function WelcomeStep({
           />
         )}
         <Text style={[textStyles.display.style, styles.headline]}>
-          Work out like someone's watching. Because they are.
+          Start on your own. Bring your crew in anytime.
         </Text>
         <Text style={[textStyles.body.style, styles.subhead]}>
-          Set a weekly goal. Log each workout with photo proof. Your partner sees it the second you tap.
+          Set a weekly goal and log with photo proof — your ring starts filling today, solo or with a group.
         </Text>
         <View style={styles.privacyRow}>
           <Text style={{ fontSize: icons.lengths.badge, color: colors.status.success.hex }}>✓</Text>
           <Text style={[textStyles.caption.style, styles.privacy]}>
-            Your photos are sealed to your account. Only you and your partner can ever see them.
+            Your photos are sealed to your account. Only you and your group can ever see them.
           </Text>
         </View>
         {/* Free-core promise (growth brief): honest, non-binding "no subscription"
