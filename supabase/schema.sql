@@ -177,9 +177,9 @@ begin
      where conrelid = 'public.workouts'::regclass
        and conname = 'workouts_caption_check'
   ) then
-    execute $$'alter table public.workouts'
-      || ' add constraint workouts_caption_check'
-      || ' check (caption is null or length(caption) between 1 and 140)'$$;
+    execute $$alter table public.workouts
+  add constraint workouts_caption_check
+  check (caption is null or length(caption) between 1 and 140)$$;
   end if;
 end;
 $s7$;
@@ -531,9 +531,9 @@ begin
        and t.tgrelid = 'public.memberships'::regclass
        and not t.tgisinternal
   ) then
-    execute $$'create trigger memberships_cap_guard_trg'
-      || ' before insert on public.memberships'
-      || ' for each row execute function public.memberships_cap_guard()'$$;
+    execute $$create trigger memberships_cap_guard_trg
+  before insert on public.memberships
+  for each row execute function public.memberships_cap_guard()$$;
   end if;
 end;
 $s7$;
