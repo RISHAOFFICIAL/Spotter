@@ -176,6 +176,118 @@ export const devMock = {
       await AsyncStorage.removeItem(`${STORE_PREFIX}teamName:${groupId}`);
     }
   },
+  /** V1.1: dev-mock weekly result snapshots (mirror the weekly_results table). */
+  async listResults(userId: string): Promise<WeeklyResultRow[]> {
+    return (await readValue<WeeklyResultRow[]>(`results:${userId}`)) ?? [];
+  },
+  async saveResult(userId: string, row: WeeklyResultRow): Promise<void> {
+    const rows = (await readValue<WeeklyResultRow[]>(`results:${userId}`)) ?? [];
+    const idx = rows.findIndex(
+      (r) => r.group_id === row.group_id && r.week_start_at === row.week_start_at,
+    );
+    if (idx >= 0) rows[idx] = row;
+    else rows.push(row);
+    await writeValue(`results:${userId}`, rows);
+  },
+  /** V1.1: drop one user's result snapshots (smoke reset between finalize assertions). */
+  async clearResults(userId: string): Promise<void> {
+    await AsyncStorage.removeItem(`${STORE_PREFIX}results:${userId}`);
+  },
+  // ---- V1.1 BUILD #2 (S slice): miss promise ------------------------------
+
+  /**
+   * The member's OWN optional miss promise ("If I miss, I owe you: ___").
+   * In the real schema the value lives on the member's OWN membership row in
+   * the pair group (own-row RLS, never readable/writable by the partner in
+   * this build); here it is stored per-user under its own key, mirroring that
+   * own-row isolation. Empty string == cleared; null == never set.
+   */
+  async getMissPromise(userId: string): Promise<string | null> {
+    const raw = await readValue<string>(`missPromise:${userId}`);
+    const trimmed = raw?.trim() ?? '';
+    return trimmed || null;
+  },
+  /** Save (trimmed) or clear (empty string) one user's miss promise. */
+  async saveMissPromise(userId: string, text: string): Promise<void> {
+    const trimmed = text.trim();
+    if (trimmed) {
+      await writeValue(`missPromise:${userId}`, trimmed);
+    } else {
+      await AsyncStorage.removeItem(`${STORE_PREFIX}missPromise:${userId}`);
+    }
+  },
+  // ---- V1.1 BUILD #3 (slice 1): notification preferences + push devices ----
+
+  /**
+   * Read one user's notification preferences. Mirrors the real
+   * `notification_preferences` row (one per user, lazily created). When the
+   * row does not exist yet, the schema defaults apply (master + invite_accepted
+   * + partner_logged + pending_invite ON, missed_week OFF) — identical to the
+   * real table defaults, so reads are consistent before a row is written.
+   */
+  async getNotificationPrefs(
+    userId: string,
+  ): Promise<NotificationPrefsRow> {
+    const stored = await readValue<Partial<NotificationPrefsRow>>(`notifPrefs:${userId}`);
+    const base: NotificationPrefsRow = {
+      user_id: userId,
+      master_enabled: true,
+      invite_accepted_enabled: true,
+      partner_logged_enabled: true,
+      missed_week_enabled: false,
+      pending_invite_enabled: true,
+      updated_at: stored?.updated_at ?? new Date().toISOString(),
+    };
+    return { ...base, ...stored, user_id: userId };
+  },
+  /** Persist one user's notification preferences (lazy-create on first write). */
+  async saveNotificationPrefs(userId: string, prefs: NotificationPrefsRow): Promise<void> {
+    await writeValue(`notifPrefs:${userId}`, { ...prefs, user_id: userId, updated_at: new Date().toISOString() });
+  },
+  /** List the push devices registered for one user (mirrors push_devices). */
+  async listPushDevices(userId: string): Promise<DevPushDevice[]> {
+    return (await readValue<DevPushDevice[]>(`pushDevices:${userId}`)) ?? [];
+  },
+  /**
+   * Register (or refresh) one push device. Mirrors the REAL upsert semantics:
+   * `expo_push_token` is globally UNIQUE and the row is upserted onConflict
+   * token with user_id attached — re-registering the same token on the same
+   * user is IDEMPOTENT (row replaced, last_seen_at refreshed), never a dup.
+   */
+  async upsertPushDevice(userId: string, device: DevPushDevice): Promise<void> {
+    const rows = (await readValue<DevPushDevice[]>(`pushDevices:${userId}`)) ?? [];
+    const idx = rows.findIndex((r) => r.expo_push_token === device.expo_push_token);
+    if (idx >= 0) {
+      // Idempotent re-register: preserve `created_at` (mirrors the REAL upsert,
+      // which omits created_at on conflict so the DB default survives — only
+      // last_seen_at + the other fields refresh). Without this the dev mock
+      // rewrites created_at each call, making step n's "created_at stable"
+      // assertion race on the millisecond boundary.
+      device.created_at = rows[idx].created_at;
+      rows[idx] = device;
+    } else {
+      rows.push(device);
+    }
+    await writeValue(`pushDevices:${userId}`, rows);
+  },
+  // ---- V1.1 BUILD #3 (slice 2): dev-mock push_deliveries log ---------------
+
+  /**
+   * Dev-mock delivery log (mirrors the REAL push_deliveries table — shape +
+   * UNIQUE dedupe_key semantics; stored per RECIPIENT user, so the smoke
+   * harness can drive cross-user sends exactly like the real per-user keys).
+   */
+  async listPushDeliveries(userId: string): Promise<DevPushDelivery[]> {
+    return (await readValue<DevPushDelivery[]>(`pushDeliveries:${userId}`)) ?? [];
+  },
+  async savePushDeliveries(userId: string, rows: DevPushDelivery[]): Promise<void> {
+    await writeValue(`pushDeliveries:${userId}`, rows);
+  },
+  /** Clear one user's delivery log (smoke reset between phases). */
+  async clearPushDeliveries(userId: string): Promise<void> {
+    await AsyncStorage.removeItem(`${STORE_PREFIX}pushDeliveries:${userId}`);
+  },
+
   /** Wipe ALL dev-mock state (smoke test / demo reset). Not used by the UI. */
   async clearAll(): Promise<void> {
     const keys = await AsyncStorage.getAllKeys();
@@ -209,6 +321,11 @@ export const devMock = {
           key === `${STORE_PREFIX}pair:${userId}` ||
           key === `${STORE_PREFIX}memberships:${userId}` ||
           key === `${STORE_PREFIX}invites:${userId}` ||
+          key === `${STORE_PREFIX}results:${userId}` ||
+          key === `${STORE_PREFIX}missPromise:${userId}` ||
+          key === `${STORE_PREFIX}notifPrefs:${userId}` ||
+          key === `${STORE_PREFIX}pushDevices:${userId}` ||
+          key === `${STORE_PREFIX}pushDeliveries:${userId}` ||
           (emailKey !== null && key === emailKey) ||
           (legacy?.id === userId && key === `${STORE_PREFIX}user`);
         if (ownedKey) {
@@ -560,6 +677,10 @@ export const devMock = {
     const removeMembership = async (uid: string) => {
       const memberships = await this.getDevMemberships(uid);
       await writeValue(`memberships:${uid}`, memberships.filter((m) => m.group_id !== groupId));
+      // V1.1 Build #2 (S slice): the miss promise lives on the membership row
+      // (real mode) — leave_group/unpair drops that row, so the dev mirror
+      // clears it for every affected user too.
+      await this.saveMissPromise(uid, '');
     };
     if (shared.members.length <= 2) {
       // Dissolve: both members return to solo.
@@ -621,6 +742,57 @@ export interface DevMembership {
   role: 'member' | 'admin';
   created_at: string;
   updated_at: string;
+}
+
+/** V1.1: dev-mock weekly result snapshot (mirrors weekly_results). */
+export interface WeeklyResultRow {
+  user_id: string;
+  group_id: string;
+  week_start_at: string;
+  week_end_at: string;
+  weekly_goal_snapshot: number;
+  workout_count: number;
+  completed: boolean;
+  nudge_present: boolean;
+}
+
+/**
+ * V1.1 Build #3: dev-mock notification preferences row (mirrors the REAL
+ * `notification_preferences` table — same columns + schema defaults).
+ */
+export interface NotificationPrefsRow {
+  user_id: string;
+  master_enabled: boolean;
+  invite_accepted_enabled: boolean;
+  partner_logged_enabled: boolean;
+  missed_week_enabled: boolean;
+  pending_invite_enabled: boolean;
+  updated_at: string;
+}
+
+/** V1.1 Build #3: dev-mock push-device row (mirrors the REAL `push_devices`
+ * table — token is globally unique, user owns the row). */
+export interface DevPushDevice {
+  user_id: string;
+  expo_push_token: string;
+  platform: string;
+  app_version: string;
+  last_seen_at: string;
+  created_at: string;
+}
+
+/** V1.1 Build #3 (slice 2): dev-mock push_deliveries row (mirrors the REAL
+ * `push_deliveries` table — dedupe_key UNIQUE per recipient user store). */
+export interface DevPushDelivery {
+  id: string;
+  user_id: string;
+  dedupe_key: string;
+  kind: string;
+  status: string;
+  suppressed_reason: string | null;
+  error: string | null;
+  created_at: string;
+  sent_at: string | null;
 }
 
 export const DEV_PARTNER_EMAIL = 'dev_partner@spotter.test';

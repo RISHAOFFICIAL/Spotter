@@ -25,6 +25,7 @@ import {
   inviteMessageTemplate,
   type InviteInfo,
 } from '@/lib/invites';
+import { track } from '@/lib/analytics';
 
 /** Exact copy per groups-copy-spec §5 (verbatim; code, not link; group term). */
 export const INVITE_ROW_LABEL = 'Send your group the invite code';
@@ -61,6 +62,9 @@ export function InviteRow() {
       // Honesty fix (spec §1): iOS resolves on cancel with `dismissedAction` —
       // read the result and ONLY swap to the success line on a real share.
       const message = inviteMessageTemplate(invite.displayCode);
+      // V1.1: share_tapped fires on every share-sheet open (intent), not on
+      // completion (iOS cancel still counts as funnel intent).
+      void track('pair_action', { action: 'share_tapped' });
       const result = await Share.share({ message });
       if (result.action === 'sharedAction') {
         setSent(true);
@@ -101,6 +105,8 @@ export function InviteRow() {
           onPress={async () => {
             try {
               await Clipboard.setStringAsync(invite.displayCode);
+              // V1.1: code_copied (the code VALUE never leaves the device).
+              void track('pair_action', { action: 'code_copied' });
             } catch {
               // Copy failure is non-fatal for the flow.
             }

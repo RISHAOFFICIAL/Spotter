@@ -20,6 +20,7 @@ import { Platform } from 'react-native';
 
 import type { Database } from './database.types';
 import { devMock } from './mock';
+import { track } from './analytics';
 
 export const EXPO_PUBLIC_SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 export const EXPO_PUBLIC_SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
@@ -169,6 +170,8 @@ export async function authenticate(email: string, password: string): Promise<Aut
       if (signUpError) {
         return { ok: false, error: signUpError.message ?? 'Sign-up failed.' };
       }
+      // V1.1 measurement: signup_completed (REAL insert; never blocks auth).
+      void track('signup_completed');
       return { ok: true };
     } catch (e) {
       return { ok: false, error: "Can't reach server. Try again." };
@@ -178,6 +181,8 @@ export async function authenticate(email: string, password: string): Promise<Aut
   // Dev mock — clearly labeled, no network
   try {
     await startDevSession(normalized);
+    // V1.1 measurement: signup_completed (dev buffer; never blocks auth).
+    void track('signup_completed');
     return { ok: true };
   } catch (e) {
     return { ok: false, error: "Can't reach server. Try again." };

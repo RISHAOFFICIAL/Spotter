@@ -18,8 +18,14 @@ import { Directory, File, Paths } from 'expo-file-system';
 
 import { devMock, type WorkoutRow, type DevMembership, DEV_PAIR_GROUP_ID } from './mock';
 import { getPetNames } from './naming';
+import { track } from './analytics';
+import { maybeFinalizePreviousWeek, previousWeekRange, countInRange } from './weeklyResults';
+import { getPetName } from './naming';
+import { getMissPromise, getPartnerMissPromise } from './missPromise';
+import { getRecapForLastCompletedWeek, isRecapDismissed } from './weekRecap';
 import { getStoredSession, supabase } from './supabase';
 import { createSignedUrls } from './storage';
+import { notifyPartnerLogged } from './pushDispatch';
 import { WEEK_START_DAYS } from './settings';
 import {
   weekStartFor,
@@ -101,6 +107,166 @@ function rowToLog(
 }
 
 // ---------------------------------------------------------------------------
+// Own-miss line (v1.1 Build #2, S slice)
+// ---------------------------------------------------------------------------
+
+/**
+ * Does the CURRENT user have a miss promise whose previous week was missed, and
+ * what is the promise text to show? Reads only the caller's OWN promise.
+ */
+async function computeOwnMissLine(userId: string): Promise<{ kind: 'ownMiss'; promise: string } | null> {
+  try {
+    const promise = await getMissPromise();
+    const missed = await wasPreviousWeekMissed(userId);
+    if (missed && promise) return { kind: 'ownMiss', promise };
+  } catch {
+    // Never fail the weekly context over a promise line — it's a whisper.
+  }
+  return null;
+}
+
+/**
+ * Partner MissCard state (v1.1 Build #2, M slice): when the PARTNER missed
+ * their previous fully-elapsed week AND their miss promise exists, Home
+ * renders one muted card at the top of the feed — nothing else. Null when
+ * either condition is false (or unpaired). No push, no badge, no shaming.
+ *
+ * Miss detection reuses the same snapshot-preferred, computed-fallback logic
+ * as the own-miss line — but with the PARTNER's week-start day and the
+ * PARTNER's goal, so the check reflects their week, not ours.
+ */
+async function computePartnerMissCard(
+  partnerId: string | null,
+  pairGroupId: string | null,
+  partnerWeekStartDay: string | null,
+  partnerGoal: number,
+): Promise<{ kind: 'partnerMiss'; promise: string } | null> {
+  if (!partnerId) return null;
+  try {
+    const promise = await getPartnerMissPromise(partnerId, pairGroupId);
+    if (!promise) return null;
+    const missed = await wasPreviousWeekMissedFor(partnerId, partnerWeekStartDay, partnerGoal);
+    if (!missed) return null;
+    return { kind: 'partnerMiss', promise };
+  } catch {
+    // Never fail the weekly context over a MissCard — it's a whisper.
+  }
+  return null;
+}
+
+/**
+ * Whether a given user's PREVIOUS fully-elapsed week was missed. Reuses the
+ * Build #1 weekly-results snapshot when one exists (the finalized row is the
+ * source of truth after finalize-on-fetch); before/without a snapshot, falls
+ * back to counting that user's workout logs inside the previous week range —
+ * the same computation the ring uses, so it stays honest.
+ *
+ * @param userId whose week to check (self or partner).
+ * @param weekStartDayOverride the user's week-start label when already known
+ *   (partner path); falls back to that user's stored profile/row.
+ * @param goalOverride the user's goal when already known (partner path);
+ *   falls back to that user's stored profile/row.
+ */
+async function wasPreviousWeekMissedFor(
+  userId: string,
+  weekStartDayOverride?: string | null,
+  goalOverride?: number,
+): Promise<boolean> {
+  const session = await getStoredSession();
+  if (!session) return false;
+  // The user's OWN stored week-start (profile in dev, users row in real) wins
+  // unless the caller already resolved it for the partner path. Unlike the
+  // original self-only helper, 'Mon' is only the last-resort default.
+  const storedDay = session.isDevMode
+    ? (await devMock.getProfile(userId))?.week_start_day
+    : (await supabase!.from('users').select('week_start_day').eq('id', userId).maybeSingle()).data
+        ?.week_start_day;
+  const weekStartDay = weekStartDayOverride ?? storedDay ?? 'Mon';
+  // Same for the goal: the caller's resolved partner goal wins; otherwise read
+  // that user's own stored goal (dev profile / latest real membership row).
+  const storedGoal = session.isDevMode
+    ? (await devMock.getProfile(userId))?.weekly_goal
+    : (
+        await supabase!
+          .from('memberships')
+          .select('weekly_goal')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      ).data?.weekly_goal;
+  const goal =
+    typeof goalOverride === 'number' && goalOverride >= 1 && goalOverride <= 7
+      ? goalOverride
+      : (storedGoal && storedGoal >= 1 && storedGoal <= 7 ? storedGoal : 3);
+
+  // Try the Build #1 snapshot first (finalized = authoritative).
+  if (session.isDevMode || !supabase) {
+    const results = await devMock.listResults(userId);
+    const prev = previousWeekRange(new Date(), weekStartDay);
+    const snap = prev
+      ? results.find((r) => r.group_id === DEV_PAIR_GROUP_ID && r.week_start_at === prev.start.toISOString())
+      : undefined;
+    if (snap) return !snap.completed;
+    // No snapshot: count logs in the previous week (ring-style fallback).
+    const rows = await devMock.listWorkouts(userId);
+    const count = prev ? countInRange(rows, prev.start, prev.end) : 0;
+    return count < goal;
+  }
+
+  try {
+    const { data: results } = await supabase
+      .from('weekly_results')
+      .select('completed')
+      .eq('user_id', userId)
+      .order('week_start_at', { ascending: false })
+      .limit(1);
+    const snap = (results ?? [])[0];
+    if (snap) return !snap.completed;
+    // No snapshot yet: count that user's logs in the previous week via ranged
+    // select. (Partner rows are visible through workouts_select_pair; own rows
+    // through workouts_select_own.)
+    const prev = previousWeekRange(new Date(), weekStartDay);
+    const { data: rows, error } = prev
+      ? await supabase
+          .from('workouts')
+          .select('id')
+          .eq('user_id', userId)
+          .gte('logged_at', prev.start.toISOString())
+          .lt('logged_at', prev.end.toISOString())
+      : ({ data: null, error: null } as const);
+    if (error) return false;
+    return (rows ?? []).length < goal;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Thin self-only wrapper kept for the own-miss line call site (no overrides).
+ */
+async function wasPreviousWeekMissed(userId: string): Promise<boolean> {
+  return wasPreviousWeekMissedFor(userId);
+}
+
+/**
+ * Week recap state (v1.1 Build #4): the most recent FULLY-elapsed week's
+ * snapshot-preferred, computed-fallback counts for self (+ partner when
+ * paired). Suppressed when this user+week was dismissed. Never fails the
+ * weekly context — a summary card must never break Home.
+ */
+async function computeWeekRecap(): Promise<WeeklyContext['weekRecap']> {
+  try {
+    const recap = await getRecapForLastCompletedWeek(new Date());
+    if (!recap) return null;
+    if (await isRecapDismissed(recap.weekStartAt)) return null;
+    return recap;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Weekly context (the single query — home-screen.md §8)
 // ---------------------------------------------------------------------------
 
@@ -170,6 +336,10 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
     const shared = await devMock.findSharedDevGroup(session.user.id);
     const groupMembers = shared?.members ?? [];
     const memberIds = shared?.member_ids ?? [];
+    // V1.1: finalize the previous fully-elapsed week (best-effort snapshot;
+    // never fails the context fetch). Dev scope = the resolved group (the
+    // pair group for a pair; the demo group for seeded 3-person demos).
+    await maybeFinalizePreviousWeek(new Date(), weekStartDay, weeklyGoal, shared?.group_id ?? DEV_PAIR_GROUP_ID);
 
     const rows = await devMock.listWorkouts(session.user.id);
     const memberRows: WorkoutRow[] = [];
@@ -216,6 +386,11 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
     // The member who STARTED the group: the admin seat (dev mirror of
     // groups.creator_id — the inviter on a pair, the seeding user on the demo).
     const creatorMembership = groupMembers.find((m) => m.role === 'admin');
+    // M slice: partner MissCard — DEV "partner" = the single co-member of
+    // a 2-person pair (the promise stays pair-private; in the 3-person demo
+    // group the card is suppressed, mirroring real 3-person groups).
+    const partner = members.length === 1 ? members[0] : null;
+    const partnerProfile = partner ? await devMock.getProfile(partner.id) : null;
     return {
       ok: true,
       context: {
@@ -227,6 +402,14 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
         groupCreatorId: creatorMembership?.user_id ?? null,
         // DEV mock never "ends" a week — ring stays honest-volt, no red scare.
         weekEndedUnmet: false,
+        missLine: await computeOwnMissLine(session.user.id),
+        partnerMissCard: await computePartnerMissCard(
+          partner?.id ?? null,
+          DEV_PAIR_GROUP_ID,
+          partnerProfile?.week_start_day ?? null,
+          partnerProfile?.weekly_goal ?? 3,
+        ),
+        weekRecap: await computeWeekRecap(),
       },
     };
   }
@@ -281,6 +464,30 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
   // person who started the group can change its name.
   let teamName: string | null = null;
   let groupCreatorId: string | null = null;
+  // M slice: partner MissCard inputs — the partner is the single co-member
+  // of a 2-person group (the promise is pair-private; in 3-person groups the
+  // card stays off, matching memberships_select_pair's count=2 scope). The
+  // partner's goal comes from the pair-scoped membership read; their
+  // week_start_day is intentionally NOT read from users (own-row RLS keeps
+  // partner days private) — the helper falls back to 'Mon'/goal 3 and the
+  // snapshot path (finalize-on-fetch) still decides real misses.
+  let partnerId: string | null = null;
+  let partnerWeekStartDay: string | null = null;
+  let partnerGoal = 3;
+  if (members.length === 1) {
+    partnerId = members[0].id;
+    const { data: partnerSettings } = await supabase
+      .from('memberships')
+      .select('weekly_goal')
+      .eq('user_id', partnerId)
+      .eq('group_id', group.group_id ?? '')
+      .maybeSingle();
+    if (partnerSettings?.weekly_goal && partnerSettings.weekly_goal >= 1 && partnerSettings.weekly_goal <= 7) {
+      partnerGoal = partnerSettings.weekly_goal;
+    }
+  }
+  // The group row read lands on OUR group's id (master's my_group shape).
+  const pairGroupId = group.group_id ?? null;
   if (group.group_id) {
     const { data: groupRow } = await supabase
       .from('groups')
@@ -309,6 +516,10 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
   );
   const signed = await createSignedUrls(photoPaths);
 
+  // V1.1: finalize the previous fully-elapsed week (best-effort snapshot;
+  // never fails the context fetch). Real scope = the current group id
+  // (group-scoped weekly_results rows, consistent with real snapshots).
+  await maybeFinalizePreviousWeek(new Date(), weekStartDay, weeklyGoal, group.group_id);
   const ownWeek = (rows ?? []).filter((r) => r.user_id === session.user.id && inWeek(r));
   return {
     ok: true,
@@ -327,6 +538,9 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
       teamName,
       groupCreatorId,
       weekEndedUnmet: now >= weekEnd && ownWeek.length < weeklyGoal,
+      missLine: await computeOwnMissLine(session.user.id),
+      partnerMissCard: await computePartnerMissCard(partnerId, pairGroupId, partnerWeekStartDay, partnerGoal),
+      weekRecap: await computeWeekRecap(),
     },
   };
 }
@@ -392,6 +606,16 @@ export async function logWorkout(input: NewWorkout): Promise<LogWorkoutResult> {
         created_at: now,
       };
       await devMock.pushWorkout(session.user.id, row);
+      // V1.1: workout_logged — references the workout id only + the weekly
+      // count (no photo path, no names — privacy guardrail).
+      void track('workout_logged', {
+        sourceId: workoutId,
+        groupId: DEV_PAIR_GROUP_ID,
+        props: { week_count: (await devMock.listWorkouts(session.user.id)).length },
+      });
+      // V1.1 Build #3 slice 2: partner_logged push — AFTER commit, never
+      // blocks the log (fire-and-forget, try/catch inside).
+      void notifyPartnerLogged(workoutId, input.workoutType ?? null);
       return {
         ok: true,
         log: rowToLog(
@@ -439,6 +663,11 @@ export async function logWorkout(input: NewWorkout): Promise<LogWorkoutResult> {
 
     const signed = await createSignedUrls([photoPath, envPath]);
 
+    // V1.1: workout_logged — references the workout id only (no photo path).
+    void track('workout_logged', { sourceId: row.id });
+    // V1.1 Build #3 slice 2: partner_logged push — AFTER commit, never
+    // blocks the log (fire-and-forget, try/catch inside).
+    void notifyPartnerLogged(row.id, input.workoutType ?? null);
     return {
       ok: true,
       log: rowToLog(

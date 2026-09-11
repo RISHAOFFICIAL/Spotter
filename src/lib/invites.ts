@@ -19,8 +19,10 @@
 import * as Crypto from 'expo-crypto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import { devMock, formatDevInviteCode, type DevInvite } from './mock';
+import { devMock, formatDevInviteCode, DEV_PAIR_GROUP_ID, type DevInvite } from './mock';
 import { getStoredSession, supabase } from './supabase';
+import { track } from './analytics';
+import { notifyInviteAccepted, notifyInviteAcceptedAfterRealPair } from './pushDispatch';
 
 export const INVITE_CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
@@ -125,9 +127,18 @@ export async function getOrCreateInviteCode(): Promise<InviteInfo> {
       }
     }
     await devMock.getOrSeedPartner();
+    // V1.1: first persisted generation = invite_created (stable token, so this
+    // fires once per install — subsequent calls reuse the token, no event).
+    if (!stored?.token) {
+      void track('pair_action', { action: 'invite_created' });
+    }
     return { displayCode: formatDevInviteCode(token), token, isDev: true };
   }
 
+  // V1.1: real-mode first generation = invite_created (same once-per-token rule).
+  if (!stored?.token) {
+    void track('pair_action', { action: 'invite_created' });
+  }
   // REAL mode: one invite row per user+token, idempotent, attached lazily to
   // the SAME stored token. RLS requires `inviter_id` = auth.uid(), so this
   // branch only runs once a session exists; the guest pre-signup path above
@@ -282,24 +293,49 @@ export async function acceptInvite(code: string): Promise<AcceptInviteResult> {
     if (inviter && inviter.id !== session.user.id) {
       // Real two-user accept: pair the current user with the inviter.
       await devMock.acceptDevPairWith(session.user.id, inviter);
+      void track('pair_action', { action: 'invite_accepted', groupId: DEV_PAIR_GROUP_ID });
+      // V1.1 Build #3 slice 2: invite_accepted push to the INVITER — AFTER
+      // commit, never blocks the accept (fire-and-forget, try/catch inside).
+      void notifyInviteAccepted({
+        inviteId: invite.id,
+        inviterId: inviter.id,
+        inviteeName: session.user.email.split('@')[0] ?? null,
+      });
       return { ok: true, inviterName: (await devMock.getDisplayName(inviter.id)) ?? 'them', memberCount: 1 };
     }
     // Self-accept keeps the slice-C single-user demo story: pairs with the
     // preset demo partner so the shared feed renders without a real person.
     await devMock.acceptDevPair(session.user.id);
+    void track('pair_action', { action: 'invite_accepted', groupId: DEV_PAIR_GROUP_ID });
+    // No invite_accepted push for the self-demo path: the "partner" is the
+    // preset demo account that never consented to receive pushes.
     const partner = await devMock.getOrSeedPartner();
     return { ok: true, inviterName: (await devMock.getDisplayName(partner.id)) ?? 'them', memberCount: 1 };
   }
 
   const { data, error } = await supabase.rpc('join_group', { p_token: normalized });
   if (error) return { ok: false, error: friendlyAcceptError(error.message) };
+  void track('pair_action', {
+    action: 'invite_accepted',
+    groupId:
+      typeof (data as { group_id?: unknown } | null)?.group_id === 'string'
+        ? (data as { group_id: string }).group_id
+        : null,
+  });
   const parsed = (typeof data === 'string' ? (JSON.parse(data || '{}') as unknown) : data) as Record<
     string,
     string | boolean | number | null | undefined
   >;
+  const groupId = typeof parsed?.group_id === 'string' ? parsed.group_id : undefined;
+  // V1.1 Build #3 slice 2: invite_accepted push to the INVITER — AFTER the
+  // RPC commit; the inviter is resolved as the other seat of the fresh pair
+  // group (the acceptor can't read the invite row — inviter-owned RLS).
+  if (groupId) {
+    void notifyInviteAcceptedAfterRealPair(groupId, session.user.email.split('@')[0] ?? null);
+  }
   return {
     ok: true,
-    groupId: typeof parsed?.group_id === 'string' ? parsed.group_id : undefined,
+    groupId,
     inviterName: typeof parsed?.inviter_name === 'string' ? parsed.inviter_name : undefined,
     memberCount: typeof parsed?.member_count === 'number' ? parsed.member_count : undefined,
   };
@@ -329,11 +365,13 @@ export async function leaveGroup(): Promise<UnpairResult> {
 
   if (session.isDevMode || !supabase) {
     await devMock.unpairDev(session.user.id);
+    void track('pair_action', { action: 'unpaired' });
     return { ok: true };
   }
 
   const { error } = await supabase.rpc('leave_group');
   if (error) return { ok: false, error: error.message };
+  void track('pair_action', { action: 'unpaired' });
   return { ok: true };
 }
 

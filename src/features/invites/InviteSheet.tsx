@@ -17,6 +17,7 @@ import {
   inviteMessageTemplate,
   type InviteInfo,
 } from '@/lib/invites';
+import { track } from '@/lib/analytics';
 
 export function InviteSheet({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const insets = useSafeAreaInsets();
@@ -38,6 +39,8 @@ export function InviteSheet({ visible, onClose }: { visible: boolean; onClose: (
   const share = async () => {
     if (!invite?.displayCode) return;
     try {
+      // V1.1: share_tapped (intent — fires before the OS sheet resolves).
+      void track('pair_action', { action: 'share_tapped' });
       await Share.share({ message: inviteMessageTemplate(invite.displayCode) });
       onClose();
     } catch {
@@ -49,6 +52,8 @@ export function InviteSheet({ visible, onClose }: { visible: boolean; onClose: (
     if (!invite?.displayCode) return;
     try {
       await Clipboard.setStringAsync(invite.displayCode);
+      // V1.1: code_copied (the code VALUE never leaves the device).
+      void track('pair_action', { action: 'code_copied' });
       setCopied(true);
       if (copiedTimer.current) clearTimeout(copiedTimer.current);
       copiedTimer.current = setTimeout(() => setCopied(false), 1500);
