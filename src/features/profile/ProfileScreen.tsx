@@ -207,10 +207,11 @@ export function ProfileScreen() {
               <TextInput
                 value={teamNameValue}
                 onChangeText={setTeamNameValue}
+                editable={groupCreatorId === session?.user?.id}
                 placeholder="e.g. Team Us"
                 placeholderTextColor={colors.text.muted.hex}
                 autoCapitalize="words"
-                style={styles.input}
+                style={[styles.input, groupCreatorId !== session?.user?.id && styles.inputDisabled]}
                 accessibilityLabel="Team name"
               />
               <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
@@ -334,6 +335,12 @@ const styles = StyleSheet.create({
     color: colors.text.primary.hex,
     fontSize: 16,
     marginTop: spacing.sm,
+  },
+  // Read-only team-name field for non-creators (groups-copy-spec §4): the
+  // muted token is the design-system "disabled" text color; everything else
+  // (fill, border, radius) stays identical to the editable field.
+  inputDisabled: {
+    color: colors.text.muted.hex,
   },
   modalBackdrop: {
     position: 'absolute',
