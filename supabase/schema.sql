@@ -16,6 +16,16 @@
 -- partner UGC): this file adds a `public.unpair()` RPC (additive, no table/
 -- policy changes). Existing/live projects MUST apply that CREATE FUNCTION
 -- before running a build that calls it (client code in src/lib/invites.ts).
+--
+-- GROUPS FEATURE (v1.0, owner decision 2026-09-11): the pair mechanism
+-- generalizes to a shared group of up to group_capacity() members (v1.0 = 3:
+-- you + up to 2 partners; the future Spotter+ tier raises the cap by changing
+-- ONE function). Changes: is_paired_with flips to >= 2 so every pair policy
+-- covers all co-members; my_group() replaces my_pair(); join_group() replaces
+-- accept_invite(); leave_group() replaces unpair(); get_invite() gains
+-- member_count/has_group; group policies are renamed _pair -> _group/_member
+-- (bodies unchanged); a memberships BEFORE INSERT trigger enforces the cap.
+-- The old pair RPCs (my_pair/accept_invite/unpair) are dropped in this file.
 
 -- users: 1:1 with auth.users (id = auth.uid())
 create table if not exists public.users (
@@ -203,13 +213,14 @@ create policy "workouts_storage_delete_own" on storage.objects
 --    to the invites table and no "anyone holding the token can update the row"
 --    policy — the token alone can never mutate invite rows.
 --  * Accepting REQUIRES auth: the invitee signs up through the normal auth
---    path first, then calls accept_invite(token) with their own JWT. The
+--    path first, then calls join_group(token) with their own JWT. The
 --    token (a random, readable code) is the capability: holding it can only
---    pair YOUR account with the inviter; it cannot impersonate or mutate
---    anything. accept_invite is a SECURITY DEFINER function that validates the
---    token, prevents self-accept, prevents double-accept, creates the pair
---    group (type 'pair' by shape: exactly 2 memberships) and inserts BOTH
---    memberships in one transaction.
+--    join YOUR account to the inviter's CURRENT group; it cannot impersonate
+--    or mutate anything. join_group is a SECURITY DEFINER function that
+--    validates the token, prevents self-accept and double-join, resolves the
+--    inviter's current shared group (creating it — inviter seat included — if
+--    the inviter is still solo), enforces group_capacity() under a table lock,
+--    and inserts the joiner's seat in one transaction.
 --  * The public (unauthenticated) Accept screen reads ONLY get_invite(token),
 --    which returns the inviter's first name + whether they have logs — no
 --    email, no rows, no photo paths.
@@ -255,11 +266,13 @@ create policy "invites_delete_own" on public.invites
 -- Fix: pair lookups now run inside SECURITY DEFINER functions owned by postgres
 -- with search_path pinned to public. The definer (the table owner) bypasses
 -- memberships RLS by design, yet the helpers are leak-proof: they only ever
--- resolve auth.uid()'s OWN pair (the 2-member group the caller belongs to),
--- return nothing for anon (auth.uid() is null), and is_paired_with's argument
--- can only flip the boolean for the caller's own accepted partner. Stranger
--- isolation is therefore unchanged: C is paired with nobody, so
--- is_paired_with(C) is false for every policy.
+-- resolve auth.uid()'s OWN shared group (any group with >= 2 members; the
+-- 2-member pair is the base case — GROUPS feature flips the count check from
+-- = 2 to >= 2 so every pair policy below covers all co-members), return
+-- nothing for anon (auth.uid() is null), and is_paired_with's argument can
+-- only flip the boolean for the caller's own co-members. Stranger isolation
+-- is therefore unchanged: C is paired with nobody, so is_paired_with(C) is
+-- false for every policy.
 -- ---------------------------------------------------------------------------
 
 create or replace function public.is_paired_with(p_other uuid)
@@ -275,7 +288,7 @@ as $$
     where mine.user_id = auth.uid()
       and theirs.user_id = p_other
       and mine.user_id <> theirs.user_id
-      and (select count(*) from public.memberships m where m.group_id = mine.group_id) = 2
+      and (select count(*) from public.memberships m where m.group_id = mine.group_id) >= 2  -- was: = 2
   );
 $$;
 
@@ -285,45 +298,45 @@ $$;
 revoke all on function public.is_paired_with(uuid) from public;
 grant execute on function public.is_paired_with(uuid) to anon, authenticated;
 
--- A user may now SELECT a workout authored by their accepted pair partner.
--- Own-row select policy above still applies (auth.uid() = user_id); this
--- policy is ADDITIVE and only fires for OTHER users' rows, and only when the
--- caller is truly paired with the row's author (security definer check).
-create policy "workouts_select_pair" on public.workouts
+-- A user may now SELECT a workout authored by a co-member of their shared
+-- group (a 2-member group = today's pair). Own-row select policy above still
+-- applies (auth.uid() = user_id); this policy is ADDITIVE and only fires for
+-- OTHER users' rows, and only when the caller truly shares a group with the
+-- row's author (security definer check).
+create policy "workouts_select_group" on public.workouts
   for select using (
     auth.uid() <> user_id
     and public.is_paired_with(user_id)
   );
 
--- Pair-scoped storage READ: a user may sign URLs for objects under their
--- accepted partner's `${user_id}/` prefix (still never public-read, still
+-- Group-scoped storage READ: a user may sign URLs for objects under a
+-- co-member's `${user_id}/` prefix (still never public-read, still
 -- signed-URL-only). Write/delete under other prefixes stay forbidden.
-create policy "workouts_storage_read_pair" on storage.objects
+create policy "workouts_storage_read_group" on storage.objects
   for select using (
     bucket_id = 'workouts'
     and auth.role() = 'authenticated'
     and public.is_paired_with(storage.foldername(name)[1]::uuid)
   );
 
--- Pair-scoped read of the partner's users row (partner name in the feed; the
--- app reads `users.name` for the resolved partner id from my_pair()). Own-row
--- access stays on users_select_own; this ADDITIVE policy covers the other seat.
-create policy "users_select_pair" on public.users
+-- Group-scoped read of a co-member's users row (names in the feed; the app
+-- reads `users.name` for the resolved ids from my_group()). Own-row access
+-- stays on users_select_own; this ADDITIVE policy covers the other seats.
+create policy "users_select_group" on public.users
   for select using (
     auth.uid() <> id
     and public.is_paired_with(id)
   );
 
--- Pair-scoped read of the PAIR GROUP row (team_name — naming feature): both
--- members may read the shared pair group. Own-row (membership-scoped) check
--- only — the caller's own membership row IS visible under memberships RLS, so
--- no security definer is needed here. Write stays creator-only
--- (groups_update_own), exactly as before.
+-- Group-scoped read of the SHARED GROUP row (team_name — naming feature): any
+-- member may read it. Own-row (membership-scoped) check only — the caller's own
+-- membership row IS visible under memberships RLS, so no security definer is
+-- needed here. Write stays creator-only (groups_update_own), exactly as before.
 --
 -- NOTE: `groups.id` must be QUALIFIED — inside the correlated subquery the
 -- bare `id` binds to memberships.id (the inner table's column shadows the
 -- outer one), which would make the check `m.group_id = m.id` → never true.
-create policy "groups_select_pair" on public.groups
+create policy "groups_select_member" on public.groups
   for select using (
     exists (
       select 1 from public.memberships m
@@ -335,168 +348,230 @@ create policy "groups_select_pair" on public.groups
 -- RPCs
 -- ---------------------------------------------------------------------------
 
--- Authenticated: resolve auth.uid()'s pair — the other seat of their 2-member
--- pair group. SECURITY DEFINER (same reasoning as is_paired_with: the partner's
--- membership row is invisible under memberships RLS, so the app cannot discover
--- the partner with plain table reads; this is the app's one approved pair
--- discovery path). Leak-proof: no arguments, and it computes ONLY from
--- auth.uid()'s own membership rows. Unpaired → {"partner_id": null,
--- "pair_group_id": null}. Returns the group id too so the app can read the
--- pair group's team_name (groups_select_pair) and target team-name writes.
-create or replace function public.my_pair()
+-- Authenticated: resolve auth.uid()'s shared GROUP (>=2 members) — the
+-- N-member generalization of the old my_pair() (2-member pair = base case).
+-- Returns {"group_id": uuid, "member_ids": [uuid,...] (co-members, excludes
+-- self), "member_count": int (len of member_ids)}; all null/[]/0 when solo.
+-- SECURITY DEFINER (same reasoning as is_paired_with: co-members' membership
+-- rows are invisible under memberships RLS, so this is the app's one approved
+-- group discovery path). Leak-proof: no arguments, and it computes ONLY from
+-- auth.uid()'s own membership rows. v1.0 has ONE shared group per user (D4),
+-- so singular is safe by construction.
+create or replace function public.my_group()
 returns jsonb
 language plpgsql
 security definer
 set search_path = public
 as $function$
 declare
-  partner_id uuid;
-  pair_group_id uuid;
+  gid uuid;
+  members uuid[];
 begin
   if auth.uid() is null then
     raise exception 'auth required';
   end if;
 
-  select mine.group_id, theirs.user_id
-    into pair_group_id, partner_id
-  from public.memberships mine
-  join public.memberships theirs on theirs.group_id = mine.group_id
-  where mine.user_id = auth.uid()
-    and theirs.user_id <> mine.user_id
-    and (select count(*) from public.memberships m where m.group_id = mine.group_id) = 2
-  limit 1;
+  select mine.group_id into gid
+    from public.memberships mine
+   where mine.user_id = auth.uid()
+     and (select count(*) from public.memberships m where m.group_id = mine.group_id) >= 2
+   order by mine.created_at desc
+   limit 1;
+
+  if gid is null then
+    return jsonb_build_object('group_id', null, 'member_ids', '[]'::jsonb, 'member_count', 0);
+  end if;
+
+  select array_agg(theirs.user_id order by theirs.created_at asc)
+    into members
+    from public.memberships theirs
+   where theirs.group_id = gid
+     and theirs.user_id <> auth.uid();
 
   return jsonb_build_object(
-    'partner_id', partner_id,
-    'pair_group_id', pair_group_id
+    'group_id', gid,
+    'member_ids', coalesce(members, '{}'),
+    'member_count', coalesce(cardinality(members), 0)
   );
 end;
 $function$;
 
-revoke all on function public.my_pair() from public;
-grant execute on function public.my_pair() to authenticated;
+revoke all on function public.my_group() from public;
+grant execute on function public.my_group() to authenticated;
+drop function if exists public.my_pair();
 
 -- Public (unauthenticated ok): resolve a pending invite code to the minimal
--- info the Accept landing screen needs (inviter first name + has-logs flag).
--- Returns one row (found) or nothing (not found / not pending).
+-- info the Accept landing screen needs (inviter first name + has-logs flag +
+-- group state). Returns one row (found) or nothing (not found / not pending).
+-- `member_count` = the inviter's CURRENT co-members in their shared group
+-- (2 when the inviter sits in a 3-person group), 0 when the inviter is solo /
+-- has no shared group yet — the Accept screen renders total size as
+-- member_count + 1 ("Join {A}'s group — 3 people in it").
+-- `has_group` = the inviter currently holds a shared-group seat (>= 2 members)
+-- — false → the Accept screen shows "Start a group with {A}" instead.
+-- Same security posture: first name + has-logs + counts only, never rows,
+-- emails or photo paths.
 create or replace function public.get_invite(p_token text)
 returns jsonb
 language sql
 security definer
 set search_path = public
-as $$
+as $g$
   select jsonb_build_object(
     'inviter_name', coalesce(split_part(u.name, ' ', 1), 'Your partner'),
     'inviter_has_logs', exists (
       select 1 from public.workouts w where w.user_id = i.inviter_id
     ),
+    'member_count', coalesce((
+      select count(*)::int
+        from public.memberships cm
+       where cm.group_id = inviter_group.gid
+         and cm.user_id <> i.inviter_id
+    ), 0),
+    'has_group', inviter_group.gid is not null,
     'found', true
   )
   from public.invites i
   join public.users u on u.id = i.inviter_id
+  left join lateral (
+    select mg.group_id as gid
+      from public.memberships mg
+     where mg.user_id = i.inviter_id
+       and (select count(*) from public.memberships x where x.group_id = mg.group_id) >= 2
+     order by mg.created_at desc
+     limit 1
+  ) inviter_group on true
   where i.token = p_token and i.status = 'pending'
   limit 1;
-$$;
+$g$;
 
--- Authenticated: pair the CURRENT auth.uid() with the inviter of this token.
--- Validates: token exists + pending; not your own invite. Creates the pair
--- group ("{FirstName} & {FirstName}") and both memberships in one transaction;
--- copies the inviter's weekly goal; invites get goal 3 until they onboard
--- (commitOnboarding upserts their real goal into the pair membership).
-create or replace function public.accept_invite(p_token text)
+revoke all on function public.get_invite(text) from public;
+grant execute on function public.get_invite(text) to anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- GROUP SIZE CAP (v1.0, owner decision 2026-09-11): you + up to 2 partners = 3.
+-- The cap lives in ONE function so the future Spotter+ paid tier can raise it
+-- (or add an entitlement check) with a single-function change — no migrations,
+-- no policy edits. Enforced two ways: join_group's exact count under a table
+-- lock (below), and this always-on BEFORE INSERT trigger as the table-level
+-- second line of defense for any membership insert path.
+-- ---------------------------------------------------------------------------
+create or replace function public.group_capacity()
+returns integer
+language sql
+stable
+set search_path = public
+as $f$
+  select 3;  -- v1.0 free tier: you + up to 2 partners. Future Spotter+ raises this here.
+$f$;
+
+revoke all on function public.group_capacity() from public;
+grant execute on function public.group_capacity() to anon, authenticated;
+
+create or replace function public.memberships_cap_guard()
+returns trigger
+language plpgsql
+set search_path = public
+as $f$
+begin
+  if (select count(*) from public.memberships m where m.group_id = new.group_id) >= public.group_capacity() then
+    raise exception 'this group is full';
+  end if;
+  return new;
+end;
+$f$;
+
+create trigger memberships_cap_guard_trg
+  before insert on public.memberships
+  for each row execute function public.memberships_cap_guard();
+
+-- Authenticated: join the CURRENT auth.uid() to the inviter's group via token
+-- (replaces the old accept_invite; a 2-member pair is just the 2-seat case).
+-- Validates: token exists + pending; not your own invite. Resolves the
+-- inviter's CURRENT shared group (>= 2 members); if the inviter is still solo,
+-- creates a fresh group ("{FirstName} & {FirstName}", creator = inviter,
+-- inviter's goal copied) and seats the inviter first — so a code always
+-- resolves to the inviter's current group, never a stranger's. Enforces
+-- group_capacity() (v1.0 = 3) exactly under a table lock, rejects
+-- already-members (idempotent-ish), and seats the joiner with goal 3 until
+-- onboarding/Profile upserts their real goal. One code, reusable by multiple
+-- distinct accepters (status stays 'pending'); rotation = delete + regenerate.
+create or replace function public.join_group(p_token text)
 returns jsonb
 language plpgsql
 security definer
 set search_path = public
-as $$
+as $function$
 declare
   invite_row public.invites%rowtype;
-  inviter_goal int;
-  inviter_first text;
-  invitee_first text;
-  pair_group_id uuid;
+  inviter_first text; invitee_first text;
+  gid uuid; my_goal int; cnt int;
   my_id uuid := auth.uid();
 begin
-  if my_id is null then
-    raise exception 'auth required';
-  end if;
+  if my_id is null then raise exception 'auth required'; end if;
+  -- exact cap enforcement: serialize joins table-wide (join frequency is tiny)
+  lock table public.memberships in share row exclusive mode;
 
-  select * into invite_row
-  from public.invites
-  where token = p_token
-  for update;
+  select * into invite_row from public.invites where token = p_token for update;
+  if invite_row is null then raise exception 'code not found'; end if;
+  if invite_row.status <> 'pending' then raise exception 'already accepted'; end if;  -- kept: an inviter may rotate to invalidate
+  if invite_row.inviter_id = my_id then raise exception 'you cannot accept your own invite'; end if;
 
-  if invite_row is null then
-    raise exception 'code not found';
-  end if;
-  if invite_row.status <> 'pending' then
-    raise exception 'already accepted';
-  end if;
-  if invite_row.inviter_id = my_id then
-    raise exception 'you cannot accept your own invite';
-  end if;
-
-  select coalesce(m.weekly_goal, 3)
-    into inviter_goal
+  -- Resolve the inviter's current shared group (create if solo; one group per user, D4)
+  select m.group_id into gid
     from public.memberships m
-    where m.user_id = invite_row.inviter_id
-    order by m.created_at desc
-    limit 1;
+   where m.user_id = invite_row.inviter_id
+     and (select count(*) from public.memberships x where x.group_id = m.group_id) >= 2
+   order by m.created_at desc limit 1;
 
-  select coalesce(split_part(u.name, ' ', 1), 'Partner')
-    into inviter_first
-    from public.users u
-    where u.id = invite_row.inviter_id;
+  if gid is null then
+    select coalesce(split_part(u.name,' ',1),'Partner') into inviter_first from public.users u where u.id = invite_row.inviter_id;
+    select coalesce(split_part(u.name,' ',1),'You') into invitee_first from public.users u where u.id = my_id;
+    insert into public.groups (name, creator_id) values (inviter_first || ' & ' || invitee_first, invite_row.inviter_id) returning id into gid;
+    select coalesce(m.weekly_goal, 3) into my_goal from public.memberships m
+      where m.user_id = invite_row.inviter_id order by m.created_at desc limit 1;
+    insert into public.memberships (group_id, user_id, weekly_goal, role)
+      values (gid, invite_row.inviter_id, coalesce(my_goal,3), 'admin');
+  end if;
 
-  select coalesce(split_part(u.name, ' ', 1), 'You')
-    into invitee_first
-    from public.users u
-    where u.id = my_id;
+  select count(*) into cnt from public.memberships where group_id = gid;
+  if cnt >= public.group_capacity() then raise exception 'this group is full'; end if;
 
-  insert into public.groups (name, creator_id)
-  values (inviter_first || ' & ' || invitee_first, invite_row.inviter_id)
-  returning id into pair_group_id;
+  if exists (select 1 from public.memberships m where m.group_id = gid and m.user_id = my_id) then
+    raise exception 'you are already in this group';  -- idempotent-ish; client can map to a friendly message
+  end if;
 
   insert into public.memberships (group_id, user_id, weekly_goal, role)
-  values
-    (pair_group_id, invite_row.inviter_id, inviter_goal, 'admin'),
-    (pair_group_id, my_id, 3, 'member')
-  on conflict (group_id, user_id) do nothing;
+    values (gid, my_id, 3, 'member');  -- goal 3 until onboarding/Profile upserts their real goal
 
-  update public.invites
-     set status = 'accepted', accepted_at = now()
-   where id = invite_row.id;
-
-  return jsonb_build_object(
-    'ok', true,
-    'group_id', pair_group_id,
-    'inviter_name', inviter_first
-  );
+  return jsonb_build_object('ok', true, 'group_id', gid, 'member_count', cnt + 1,
+    'inviter_name', coalesce((select split_part(u.name,' ',1) from public.users u where u.id = invite_row.inviter_id), 'Partner'));
 end;
-$$;
+$function$;
 
-revoke all on function public.get_invite(text) from public;
-grant execute on function public.get_invite(text) to anon, authenticated;
-revoke all on function public.accept_invite(text) from public;
-grant execute on function public.accept_invite(text) to authenticated;
+revoke all on function public.join_group(text) from public;
+grant execute on function public.join_group(text) to authenticated;
+drop function if exists public.accept_invite(text);
 
--- Authenticated: unpair the CURRENT auth.uid() from their 2-member pair group.
--- Both sides return to solo (their personal "Personal" group + workout rows are
--- untouched). This is the UGC "stop receiving partner content" control: once
--- both memberships of the pair group are gone, the pair-scoped READ policies
--- (`workouts_select_pair`, `workouts_storage_read_pair`) no longer match, so
--- the ex-partner's photos and storage objects are sealed again immediately.
+-- Authenticated: remove the CURRENT auth.uid() from their shared group
+-- (replaces the old unpair; a 2-member pair is just the 2-seat case).
+-- Group exists iff it has >= 2 members:
+--   * <= 2 seats total → remove our seat AND delete the group row (dissolve;
+--     the survivor returns to pure solo — their "Personal" group always was a
+--     separate row). Same observable outcome as today's 2-member unpair.
+--   * >= 3 seats → the group outlives us: if we are the creator, reassign
+--     creator_id to the OLDEST remaining member FIRST (groups.creator_id
+--     references public.users ON DELETE CASCADE — reusing delete_account's
+--     hand-over hygiene so our auth row can never nuke the group), then delete
+--     only our own membership row. Remaining members' past workouts/photos
+--     become invisible to us immediately (every read is membership-driven).
+-- The leaver keeps ALL own rows (workouts survive with group_id set null via
+-- the FK; photos stay under their own storage prefix).
 --
--- D2 (hygiene): after deleting both pair memberships we also clear the pair
--- group's optional team_name and delete the now-empty pair group row itself
--- (previously orphaned). User-visible behavior is unchanged — reads are
--- membership-driven, and workouts.group_id is `on delete set null`, so workout
--- rows survive with group_id null.
---
--- SECURITY DEFINER (so a member can delete the OTHER seat's membership row,
--- which `memberships_delete_own` alone would forbid) + no argument (a user can
--- only ever unpair THEMSELVES). Idempotent: already-solo → no-op, still ok.
-create or replace function public.unpair()
+-- SECURITY DEFINER (so a member can delete their OWN seat — same shape as
+-- unpair; the group-row delete needs no extra grant) + no argument (a user can
+-- only ever leave on THEIR OWN behalf). Idempotent: already-solo → no-op, ok.
+create or replace function public.leave_group()
 returns jsonb
 language plpgsql
 security definer
@@ -504,35 +579,60 @@ set search_path = public
 as $function$
 declare
   my_id uuid := auth.uid();
-  pair_group_id uuid;
+  gid uuid;
+  members_left int;
 begin
   if my_id is null then
     raise exception 'auth required';
   end if;
 
-  -- My 2-member pair group (the "Personal" solo group has 1 member and is
-  -- ignored). Only the pair group is dissolved; personal data stays put.
-  select mine.group_id into pair_group_id
+  -- My current shared group (>=2 members); the 1-member "Personal" solo group
+  -- is ignored and never touched.
+  select mine.group_id into gid
   from public.memberships mine
   where mine.user_id = my_id
-    and (select count(*) from public.memberships m where m.group_id = mine.group_id) = 2
+    and (select count(*) from public.memberships m where m.group_id = mine.group_id) >= 2
+  order by mine.created_at desc
   limit 1;
 
-  if pair_group_id is not null then
-    delete from public.memberships where group_id = pair_group_id;
-    -- D2: clear the pair's shared team name and remove the now-empty pair
-    -- group row (no memberships remain; workouts.group_id is set-null on
-    -- group delete so workout rows are preserved).
-    update public.groups set team_name = null where id = pair_group_id;
-    delete from public.groups where id = pair_group_id;
+  if gid is null then
+    return jsonb_build_object('ok', true);  -- already solo: no-op
+  end if;
+
+  select count(*) into members_left
+    from public.memberships m
+   where m.group_id = gid;
+
+  if members_left <= 2 then
+    -- Removing our seat leaves <= 1 member: dissolve the group. The group-row
+    -- delete cascades the remaining seats and sets workouts.group_id null
+    -- (workout rows survive); the survivor keeps only their Personal group.
+    delete from public.groups where id = gid;
+  else
+    -- The group outlives us (>= 2 seats remain after our leave): if we created
+    -- it, hand creator_id to the oldest remaining member FIRST (same logic as
+    -- delete_account), then remove only our own seat.
+    update public.groups
+       set creator_id = (
+         select m2.user_id
+           from public.memberships m2
+          where m2.group_id = gid
+            and m2.user_id <> my_id
+          order by m2.created_at asc, m2.id asc
+          limit 1
+       )
+     where id = gid and creator_id = my_id;
+    delete from public.memberships
+     where group_id = gid and user_id = my_id;
   end if;
 
   return jsonb_build_object('ok', true);
 end;
 $function$;
 
-revoke all on function public.unpair() from public;
-grant execute on function public.unpair() to authenticated;
+revoke all on function public.leave_group() from public;
+grant execute on function public.leave_group() to authenticated;
+drop function if exists public.unpair();
 
 -- Authenticated ONLY: permanently delete the CURRENT user's account + data
 -- (App Store Guideline 5.1.1(v) — in-app account deletion, real mode).
