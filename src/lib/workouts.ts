@@ -88,6 +88,54 @@ export interface WeeklyContext {
   groupCreatorId: string | null;
   /** Week already ended AND goal missed (ring turns danger red only then). */
   weekEndedUnmet: boolean;
+  /**
+   * V1.1 Build #2 (S slice) — own-miss line. A small muted line Home shows
+   * ONLY when THIS user missed the PREVIOUS week AND set a miss promise:
+   * `{ kind: 'ownMiss', promise }` → render `You said: "{promise}"` + one
+   * gentle line. `null` when the previous week was NOT missed or no promise
+   * is set.
+   */
+  missLine: { kind: 'ownMiss'; promise: string } | null;
+  /**
+   * V1.1 Build #2 (M slice) — partner MissCard state. A muted card at the top
+   * of the feed shown ONLY when the PARTNER missed THEIR previous
+   * fully-elapsed week AND their miss promise exists:
+   * `{ kind: 'partnerMiss', promise }` → render
+   * `{partnerFirstName} missed last week. Their note: "{promise}"` + nothing
+   * else. `null` when either condition is false (or unpaired). No push, no
+   * badge, no shaming copy — passive feed surface only.
+   */
+  partnerMissCard: { kind: 'partnerMiss'; promise: string } | null;
+  /**
+   * V1.1 Build #4 — week recap state. ONE card at week rollover, personal
+   * results only (no history, no browsing): `{ own, partner }` counts for the
+   * most recent FULLY-elapsed week, or null when the week isn't elapsed yet or
+   * there is no recorded evidence. Read-only summaries of Build #1 snapshots
+   * (computed fallback when a snapshot is missing); computed in
+   * `fetchWeeklyContext` via weekRecap.ts. Home shows it once per completed
+   * week (dismissal persists per user+week in AsyncStorage).
+   */
+  weekRecap: WeekRecap | null;
+}
+
+/** One side of the week recap: plain counts + completion. */
+export interface RecapSide {
+  count: number;
+  goal: number;
+  completed: boolean;
+}
+
+/** The most recent fully-elapsed week's recap (Build #4, weekRecap.ts). */
+export interface WeekRecap {
+  /** ISO start of the completed week (also the dismissal key suffix). */
+  weekStartAt: string;
+  weekEndAt: string;
+  own: RecapSide;
+  /** Null when solo (no accepted partner). */
+  partner: RecapSide | null;
+  partnerId: string | null;
+  /** Partner's real first name (UI may prefer the local pet-name display name). */
+  partnerFirstName: string | null;
 }
 
 /** Parsed shape of the SECURITY DEFINER `my_group()` RPC (schema.sql). */

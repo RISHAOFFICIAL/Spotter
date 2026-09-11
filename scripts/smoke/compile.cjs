@@ -14,6 +14,8 @@ const OUT = path.join(ROOT, 'scripts', 'smoke', '.compiled');
 
 const FILES = [
   'src/lib/mock.ts',
+  'src/lib/analytics.ts',
+  'src/lib/weeklyResults.ts',
   'src/lib/invites.ts',
   'src/lib/supabase.ts',
   'src/lib/workouts.ts',
@@ -21,6 +23,12 @@ const FILES = [
   'src/lib/storage.ts',
   'src/lib/workoutStore.ts',
   'src/lib/naming.ts',
+  'src/lib/missPromise.ts',
+  'src/lib/notificationPrefs.ts',
+  'src/lib/notifications.ts',
+  'src/lib/pushRegistration.ts',
+  'src/lib/pushDispatch.ts',
+  'src/lib/weekRecap.ts',
 ];
 
 function stripUnused(moduleMap) {

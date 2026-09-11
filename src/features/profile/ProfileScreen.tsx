@@ -12,7 +12,7 @@
  * after the deletion actually completed — no fake delete.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,6 +22,14 @@ import { AppButton, TextButton } from '@/components/AppButton';
 import { deleteAccount } from '@/lib/accountDeletion';
 import { leaveGroup } from '@/lib/invites';
 import { getPetNames, setPetNameFor, setTeamName } from '@/lib/naming';
+import { getMissPromise, setMissPromise, MISS_PROMISE_MAX } from '@/lib/missPromise';
+import {
+  getNotificationPrefs,
+  setNotificationPref,
+  NOTIFICATION_TYPES,
+  NOTIFICATION_META,
+  type NotificationPrefs,
+} from '@/lib/notificationPrefs';
 import { fetchWeeklyContext } from '@/lib/workoutStore';
 import type { GroupMemberInfo } from '@/lib/workouts';
 import { colors, radius, spacing } from '@/theme/tokens';
@@ -48,6 +56,18 @@ export function ProfileScreen() {
   const [groupCreatorId, setGroupCreatorId] = useState<string | null>(null);
   const [namingBusy, setNamingBusy] = useState(false);
 
+  // Miss promise (v1.1 Build #2, S slice): an OPTIONAL personal note — "If I
+  // miss, I owe you: ___". Set/edited/cleared by each member for THEMSELVES,
+  // ≤80 chars, private to the pair, shown to the partner only via the
+  // future recap. Never a wager/enforcement system — neutral, optional copy.
+  const [missPromise, setMissPromiseValue] = useState('');
+  const [missPromiseBusy, setMissPromiseBusy] = useState(false);
+  // Notification preferences (v1.1 Build #3, slice 1): the four push types as
+  // per-user toggles. Reads once on mount; each flip writes through the lib
+  // (lazy defaults row; own-row RLS in real mode, devMock parity in dev).
+  const [notifPrefs, setNotifPrefs] = useState<NotificationPrefs | null>(null);
+  const [notifError, setNotifError] = useState<string | null>(null);
+  const [notifBusy, setNotifBusy] = useState(false);
   // Leave group (compliance: stop receiving member UGC). Two-tap confirm: the
   // first tap flips the label to "Tap again to confirm" for 3s; a second tap
   // inside that window runs leaveGroup(). No new screens.
@@ -56,18 +76,19 @@ export function ProfileScreen() {
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadNaming = async () => {
-    const [ctx, petMap] = await Promise.all([fetchWeeklyContext(), getPetNames()]);
+    const [ctx, petMap, miss] = await Promise.all([fetchWeeklyContext(), getPetNames(), getMissPromise()]);
     if (!ctx.ok || !ctx.context) return;
     setMembers(ctx.context.members);
     setTeamNameValue(ctx.context.teamName ?? '');
     setGroupCreatorId(ctx.context.groupCreatorId ?? null);
     setPetNames(petMap);
+    setMissPromiseValue(miss ?? '');
   };
 
   useEffect(() => {
     let mounted = true;
     (async () => {
-      const [ctx, petMap] = await Promise.all([fetchWeeklyContext(), getPetNames()]);
+      const [ctx, petMap, miss] = await Promise.all([fetchWeeklyContext(), getPetNames(), getMissPromise()]);
       if (!mounted) return;
       if (ctx.ok && ctx.context) {
         setMembers(ctx.context.members);
@@ -75,7 +96,14 @@ export function ProfileScreen() {
         setGroupCreatorId(ctx.context.groupCreatorId ?? null);
       }
       setPetNames(petMap);
+      setMissPromiseValue(miss ?? '');
     })();
+    // Notification prefs load (v1.1 Build #3): independent of pairing — the
+    // toggles mirror the schema defaults even before a row exists.
+    void getNotificationPrefs().then((prefs) => {
+      if (!mounted) return;
+      setNotifPrefs(prefs);
+    });
     return () => {
       mounted = false;
       if (confirmTimer.current) clearTimeout(confirmTimer.current);
@@ -96,6 +124,35 @@ export function ProfileScreen() {
     const teamRes = await setTeamName(teamNameValue);
     setNamingBusy(false);
     setMessage(teamRes.ok ? 'Saved.' : (teamRes.error ?? 'Saved.'));
+  };
+
+  // Save (or clear, when empty) THIS user's own miss promise. Trim + ≤80
+  // handled in the lib; this just flushes the field and reports truthfully.
+  const saveMissPromise = async (text: string) => {
+    if (missPromiseBusy) return;
+    setMissPromiseBusy(true);
+    setMessage(null);
+    const res = await setMissPromise(text);
+    if (res.ok) setMissPromiseValue(text);
+    setMissPromiseBusy(false);
+    setMessage(res.ok ? 'Saved. This shows only if you miss the week.' : (res.error ?? 'Could not save.'));
+  };
+
+  // Flip ONE notification toggle (v1.1 Build #3). Optimistic local flip +
+  // truthful restore on write failure — the toggle never silently lies.
+  const toggleNotif = async (type: keyof NotificationPrefs, enabled: boolean) => {
+    if (notifBusy || !notifPrefs) return;
+    setNotifBusy(true);
+    setNotifError(null);
+    const next = { ...notifPrefs, [type]: enabled };
+    setNotifPrefs(next);
+    const res = await setNotificationPref(type, enabled);
+    setNotifBusy(false);
+    if (!res.ok) {
+      // Restore the prior truthful value + surface the failure.
+      setNotifPrefs((prev) => (prev ? { ...prev, [type]: !enabled } : prev));
+      setNotifError(res.error ?? 'Could not save. Try again.');
+    }
   };
 
   // Two-tap confirm: first tap arms the confirm for 3s, second tap executes.
@@ -226,6 +283,38 @@ export function ProfileScreen() {
 
               <AppButton label="Save" onPress={() => void saveNaming()} loading={namingBusy} style={{ marginTop: spacing.lg }} />
 
+              {/* Miss promise (v1.1 Build #2, S slice) — optional personal
+                  note shown ONLY if THIS member misses a week. Low-emphasis,
+                  neutral, never shaming: it is a note to the pair, NOT a
+                  wager/stake/bet/debt/enforcement system. */}
+              <Text style={[textStyles.label.style, { color: colors.text.muted.hex, marginTop: spacing.xxl }]}>IF I MISS…</Text>
+              <TextInput
+                value={missPromise}
+                onChangeText={setMissPromiseValue}
+                placeholder="I owe you: ___"
+                placeholderTextColor={colors.text.muted.hex}
+                maxLength={MISS_PROMISE_MAX}
+                autoCapitalize="sentences"
+                style={styles.input}
+                accessibilityLabel="Miss note — what I owe if I miss the week"
+              />
+              <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+                A private note your partner sees only if you miss the week. Optional.
+              </Text>
+              <View style={styles.missRow}>
+                <TextButton label="Save" onPress={() => void saveMissPromise(missPromise)} color={colors.text.secondary.hex} />
+                {missPromise ? (
+                  <TextButton
+                    label="Clear"
+                    onPress={() => void saveMissPromise('')}
+                    color={colors.text.muted.hex}
+                  />
+                ) : null}
+                {missPromiseBusy && <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>…</Text>}
+              </View>
+
+              {/* Unpair — low-emphasis destructive-adjacent row at the bottom of
+                  the partner card. Two-tap confirm; neutral, recoverable copy. */}
               {/* Leave group — low-emphasis destructive-adjacent row at the
                   bottom of the group card. Two-tap confirm; neutral, recoverable
                   copy (groups-copy-spec §4). */}
@@ -249,6 +338,43 @@ export function ProfileScreen() {
               Start a group to add nicknames or a team name.
             </Text>
           )}
+        </View>
+
+        {/* Notification preferences (v1.1 Build #3) — muted switches matching
+            the DANGER ZONE aesthetics (quiet, no volt fills). The four push
+            types are the ONLY ones that exist; copy is honest (missed-week
+            stays OFF by default — the toggle IS the control). */}
+        <Text style={[textStyles.label.style, { color: colors.text.muted.hex, marginTop: spacing.xxxl }]}>NOTIFICATIONS</Text>
+        <View style={styles.card}>
+          {notifPrefs ? (
+            NOTIFICATION_TYPES.map((type) => {
+              const meta = NOTIFICATION_META[type];
+              return (
+                <View key={type} style={styles.notifRow}>
+                  <View style={styles.notifCopy}>
+                    <Text style={[textStyles.captionStrong.style, { color: colors.text.primary.hex }]}>{meta.label}</Text>
+                    <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>{meta.caption}</Text>
+                  </View>
+                  <Switch
+                    value={notifPrefs[type]}
+                    onValueChange={(v) => void toggleNotif(type, v)}
+                    disabled={notifBusy}
+                    trackColor={{ false: colors.background.overlay.hex, true: colors.status.success.hex }}
+                    thumbColor={notifPrefs[type] ? colors.text.onVolt.hex : colors.text.muted.hex}
+                    accessibilityLabel={`${meta.label} notifications`}
+                  />
+                </View>
+              );
+            })
+          ) : (
+            <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>Loading…</Text>
+          )}
+          {notifError && (
+            <Text style={[textStyles.caption.style, { color: colors.text.danger.hex }]}>{notifError}</Text>
+          )}
+          <Text style={[textStyles.caption.style, { color: colors.text.muted.hex, marginTop: spacing.xs }]}>
+            Off until you turn them on. You can change these anytime.
+          </Text>
         </View>
 
         {/* Danger zone — discoverable, honest, not hidden. */}
@@ -325,6 +451,9 @@ const styles = StyleSheet.create({
   },
   dangerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   unpairRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.md },
+  missRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, marginTop: spacing.sm },
+  notifRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.lg, paddingVertical: spacing.xs },
+  notifCopy: { flex: 1, gap: 2 },
   input: {
     height: 48,
     borderRadius: radius.md,

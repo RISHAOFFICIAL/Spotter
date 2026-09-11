@@ -77,6 +77,14 @@ export interface Database {
           user_id: string;
           weekly_goal: number;
           role: 'member' | 'admin';
+          /**
+           * V1.1 Build #2 (S slice): the member's OWN optional miss promise
+           * ("If I miss, I owe you: ___", ≤80 chars, personal accountability
+           * note — NOT a wager/enforcement system). Null = never set; empty
+           * string = cleared. Own-row RLS only: never readable/writable by the
+           * partner in this build.
+           */
+          miss_promise: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -86,6 +94,7 @@ export interface Database {
           user_id: string;
           weekly_goal: number;
           role?: 'member' | 'admin';
+          miss_promise?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -95,6 +104,7 @@ export interface Database {
           user_id?: string;
           weekly_goal?: number;
           role?: 'member' | 'admin';
+          miss_promise?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -166,6 +176,183 @@ export interface Database {
             referencedColumns: ['id'];
           },
         ];
+      };
+      analytics_events: {
+        Row: {
+          id: string;
+          event_name: string;
+          action: string | null;
+          anonymous_install_id: string | null;
+          session_id: string | null;
+          user_id: string | null;
+          group_id: string | null;
+          source_id: string | null;
+          occurred_at: string;
+          app_version: string | null;
+          properties: Json;
+        };
+        Insert: {
+          id?: string;
+          event_name: string;
+          action?: string | null;
+          anonymous_install_id?: string | null;
+          session_id?: string | null;
+          user_id?: string | null;
+          group_id?: string | null;
+          source_id?: string | null;
+          occurred_at?: string;
+          app_version?: string | null;
+          properties?: Json;
+        };
+        Update: {
+          id?: string;
+          event_name?: string;
+          action?: string | null;
+          anonymous_install_id?: string | null;
+          session_id?: string | null;
+          user_id?: string | null;
+          group_id?: string | null;
+          source_id?: string | null;
+          occurred_at?: string;
+          app_version?: string | null;
+          properties?: Json;
+        };
+        Relationships: [];
+      };
+      weekly_results: {
+        Row: {
+          id: string;
+          user_id: string;
+          group_id: string;
+          week_start_at: string;
+          week_end_at: string;
+          weekly_goal_snapshot: number;
+          workout_count: number;
+          completed: boolean;
+          nudge_present: boolean | null;
+          finalized_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          group_id: string;
+          week_start_at: string;
+          week_end_at: string;
+          weekly_goal_snapshot: number;
+          workout_count?: number;
+          completed?: boolean;
+          nudge_present?: boolean | null;
+          finalized_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          group_id?: string;
+          week_start_at?: string;
+          week_end_at?: string;
+          weekly_goal_snapshot?: number;
+          workout_count?: number;
+          completed?: boolean;
+          nudge_present?: boolean | null;
+          finalized_at?: string;
+        };
+        Relationships: [];
+      };
+      notification_preferences: {
+        Row: {
+          user_id: string;
+          master_enabled: boolean;
+          invite_accepted_enabled: boolean;
+          partner_logged_enabled: boolean;
+          missed_week_enabled: boolean;
+          pending_invite_enabled: boolean;
+          updated_at: string;
+        };
+        Insert: {
+          user_id: string;
+          master_enabled?: boolean;
+          invite_accepted_enabled?: boolean;
+          partner_logged_enabled?: boolean;
+          missed_week_enabled?: boolean;
+          pending_invite_enabled?: boolean;
+          updated_at?: string;
+        };
+        Update: {
+          user_id?: string;
+          master_enabled?: boolean;
+          invite_accepted_enabled?: boolean;
+          partner_logged_enabled?: boolean;
+          missed_week_enabled?: boolean;
+          pending_invite_enabled?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      push_devices: {
+        Row: {
+          id: string;
+          user_id: string;
+          expo_push_token: string;
+          platform: string | null;
+          app_version: string | null;
+          last_seen_at: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          expo_push_token: string;
+          platform?: string | null;
+          app_version?: string | null;
+          last_seen_at?: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          expo_push_token?: string | null;
+          platform?: string | null;
+          app_version?: string | null;
+          last_seen_at?: string;
+          created_at?: string;
+        };
+        Relationships: [];
+      };
+      push_deliveries: {
+        Row: {
+          id: string;
+          user_id: string;
+          dedupe_key: string;
+          kind: string;
+          status: 'queued' | 'sent' | 'suppressed' | 'failed';
+          suppressed_reason: string | null;
+          error: string | null;
+          created_at: string;
+          sent_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          dedupe_key: string;
+          kind: string;
+          status?: 'queued' | 'sent' | 'suppressed' | 'failed';
+          suppressed_reason?: string | null;
+          error?: string | null;
+          created_at?: string;
+          sent_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          dedupe_key?: string | null;
+          kind?: string | null;
+          status?: 'queued' | 'sent' | 'suppressed' | 'failed';
+          suppressed_reason?: string | null;
+          error?: string | null;
+          created_at?: string;
+          sent_at?: string | null;
+        };
+        Relationships: [];
       };
       invites: {
         Row: {
