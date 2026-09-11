@@ -1,11 +1,17 @@
 /**
  * FeedCard — a workout log in the feed (home-screen.md §4). Horizontal card:
- * [photo 64×64 | name + type + timestamp]. Photo tap → full-screen viewer
- * (no pinch/zoom in MVP, ✕ to close).
+ * [photo thumb | name + type + caption + timestamp]. v1.0 dual-capture (S4b-1):
+ * TWO live shots per log — a selfie (`log.photoUri`) and an UNFILTERED
+ * environment shot (`log.photoEnvUri`) — rendered as a two-thumb block, plus
+ * one optional caption line (≤140 chars, secondary, 1 line + ellipsis) under
+ * the type label. Legacy rows (photo_env NULL) degrade to a single selfie
+ * thumb. Photo tap → full-screen viewer (no pinch/zoom in MVP, ✕ to close);
+ * the viewer handles BOTH images — tap either thumb to open it, then switch
+ * with the thumb tabs at the bottom.
  *
  * OWNER CONTROL (compliance brief #2 §5): every card carries a non-destructive
  * "Remove photo" action (overflow ellipsis ••• on the card) that deletes the
- * OWNER's own photo + log after a confirm step; partner/other-user cards are
+ * OWNER's own photos + log after a confirm step; partner/other-user cards are
  * read-only (the action renders only when logged-in user == log.userId).
  *
  * Reaction chips 🔥👏❤️🙄 are REMOVED (compliance brief #2 §4): they were
@@ -34,11 +40,23 @@ function captureTime(iso: string): string {
 export function FeedCard({ log, now }: { log: WorkoutLog; now: Date }) {
   const { session } = useAuth();
   const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerIndex, setViewerIndex] = useState(0);
   const [removing, setRemoving] = useState(false);
   const [removed, setRemoved] = useState(false);
-  const hasPhoto = !!log.photoUri;
+
+  // Displayable shots in order: selfie first, then environment ('' = legacy).
+  const shots: { uri: string; label: string; a11y: string }[] = [];
+  if (log.photoUri) shots.push({ uri: log.photoUri, label: 'YOU', a11y: 'View photo' });
+  if (log.photoEnvUri) shots.push({ uri: log.photoEnvUri, label: 'YOUR SPOT', a11y: 'View environment photo' });
+
+  const hasPhoto = shots.length > 0;
   const typeLabel = log.workoutType && log.workoutType.length > 0 ? log.workoutType : 'Workout';
   const isOwner = !!session && session.user.id === log.userId;
+
+  const openViewer = (index: number) => {
+    setViewerIndex(index);
+    setViewerOpen(true);
+  };
 
   const requestRemove = () => {
     if (removing || removed) return;
@@ -71,27 +89,35 @@ export function FeedCard({ log, now }: { log: WorkoutLog; now: Date }) {
   return (
     <View style={styles.card}>
       <View style={styles.row}>
-        <Pressable accessibilityRole="button" accessibilityLabel="View photo" onPress={() => setViewerOpen(true)} style={styles.thumbWrap}>
-          {hasPhoto ? (
-            <Image source={{ uri: log.photoUri }} style={styles.thumb} contentFit="cover" transition={150} />
-          ) : (
+        <View style={styles.thumbsWrap}>
+          {shots.length === 0 && (
             <View style={[styles.thumb, styles.thumbFallback]}>
               <Ionicons name="camera-outline" size={20} color={colors.text.muted.hex} />
             </View>
           )}
-        </Pressable>
+          {shots.map((shot, i) => (
+            <Pressable
+              key={shot.a11y}
+              accessibilityRole="button"
+              accessibilityLabel={shot.a11y}
+              onPress={() => openViewer(i)}
+              style={styles.thumbWrap}
+            >
+              <Image source={{ uri: shot.uri }} style={styles.thumb} contentFit="cover" transition={150} />
+              <Text style={styles.thumbLabel}>{shot.label}</Text>
+            </Pressable>
+          ))}
+        </View>
         <View style={styles.right}>
           <View style={styles.rowTop}>
             <Text style={[textStyles.captionStrong.style, styles.author]} numberOfLines={1}>
               {log.authorName}
             </Text>
             {hasPhoto && (
-              <>
-                <View style={styles.liveBadge}>
-                  <Ionicons name="radio" size={9} color={colors.brand.primary.hex} />
-                  <Text style={[textStyles.label.style, styles.liveBadgeText]}>Live</Text>
-                </View>
-              </>
+              <View style={styles.liveBadge}>
+                <Ionicons name="radio" size={9} color={colors.brand.primary.hex} />
+                <Text style={[textStyles.label.style, styles.liveBadgeText]}>Live</Text>
+              </View>
             )}
             {/* Owner-only overflow control (non-destructive; confirm step inside). */}
             {isOwner && !removed && (
@@ -119,6 +145,11 @@ export function FeedCard({ log, now }: { log: WorkoutLog; now: Date }) {
               <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex }]} numberOfLines={1}>
                 {typeLabel}
               </Text>
+              {log.caption ? (
+                <Text style={[textStyles.caption.style, styles.caption]} numberOfLines={1} ellipsizeMode="tail">
+                  {log.caption}
+                </Text>
+              ) : null}
               <View style={styles.metaRow}>
                 <Text style={[textStyles.label.style, { color: colors.text.muted.hex }]}>
                   {relativeLogTime(log.loggedAt, now)}
@@ -134,7 +165,26 @@ export function FeedCard({ log, now }: { log: WorkoutLog; now: Date }) {
 
       <Modal visible={viewerOpen} transparent animationType="fade" onRequestClose={() => setViewerOpen(false)}>
         <View style={styles.viewer}>
-          {hasPhoto && <Image source={{ uri: log.photoUri }} style={styles.viewerImg} contentFit="contain" />}
+          {shots.length > 0 && (
+            <Image source={{ uri: shots[viewerIndex].uri }} style={styles.viewerImg} contentFit="contain" />
+          )}
+          {shots.length > 1 && (
+            <View style={styles.viewerTabs}>
+              {shots.map((shot, i) => (
+                <Pressable
+                  key={shot.a11y}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${shot.a11y} (${i + 1} of ${shots.length})`}
+                  accessibilityState={{ selected: i === viewerIndex }}
+                  onPress={() => setViewerIndex(i)}
+                  style={[styles.viewerTab, i === viewerIndex && styles.viewerTabSelected]}
+                >
+                  <Image source={{ uri: shot.uri }} style={styles.viewerTabImg} contentFit="cover" />
+                  <Text style={styles.viewerTabLabel}>{shot.label}</Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
           <Pressable accessibilityRole="button" accessibilityLabel="Close photo" onPress={() => setViewerOpen(false)} style={styles.viewerClose}>
             <Ionicons name="close" size={22} color={colors.text.primary.hex} />
           </Pressable>
@@ -158,8 +208,22 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   row: { flexDirection: 'row', gap: spacing.md },
-  thumbWrap: { width: 64, height: 64, borderRadius: radius.md, overflow: 'hidden' },
-  thumb: { width: 64, height: 64 },
+  thumbsWrap: { flexDirection: 'row', gap: 6, alignItems: 'flex-start' },
+  thumbWrap: { width: 56, height: 56, borderRadius: radius.md, overflow: 'hidden' },
+  thumb: { width: 56, height: 56 },
+  thumbLabel: {
+    position: 'absolute',
+    left: 4,
+    bottom: 3,
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    color: 'rgba(255,255,255,0.92)',
+    textShadowColor: 'rgba(0,0,0,0.75)',
+    textShadowRadius: 3,
+    textShadowOffset: { width: 0, height: 1 },
+  },
   thumbFallback: {
     backgroundColor: colors.background.raised.hex,
     alignItems: 'center',
@@ -168,6 +232,7 @@ const styles = StyleSheet.create({
   right: { flex: 1, gap: spacing.xs * 2, paddingTop: spacing.xs },
   rowTop: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   author: { flex: 1, color: colors.text.primary.hex },
+  caption: { color: colors.text.secondary.hex },
   liveBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -195,6 +260,36 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   viewerImg: { width: '100%', height: '100%' },
+  viewerTabs: {
+    position: 'absolute',
+    bottom: 48,
+    flexDirection: 'row',
+    gap: spacing.md,
+    alignItems: 'flex-end',
+  },
+  viewerTab: {
+    width: 56,
+    borderRadius: radius.md,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: 'transparent',
+    opacity: 0.72,
+  },
+  viewerTabSelected: { borderColor: colors.brand.primary.hex, opacity: 1 },
+  viewerTabImg: { width: 56, height: 56 },
+  viewerTabLabel: {
+    position: 'absolute',
+    left: 4,
+    bottom: 3,
+    fontSize: 9,
+    lineHeight: 11,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    color: 'rgba(255,255,255,0.92)',
+    textShadowColor: 'rgba(0,0,0,0.75)',
+    textShadowRadius: 3,
+    textShadowOffset: { width: 0, height: 1 },
+  },
   viewerClose: {
     position: 'absolute',
     top: 48,

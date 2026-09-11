@@ -58,17 +58,19 @@ async function ensureDevDir(userId: string): Promise<Directory> {
  * DEV MODE: persist a captured live-camera photo as a local file in a
  * per-user cache folder (mirrors the `${user_id}/` storage prefix so the
  * isolation shape is exercised even offline). Returns the stored photo.
+ * `baseName` distinguishes the selfie (`<workoutId>`) from the environment
+ * shot (`<workoutId>-env`) — both live under the SAME per-user folder.
  */
 async function storeDevPhoto(
   userId: string,
-  workoutId: string,
+  baseName: string,
   sourceUri: string,
 ): Promise<DevPhoto> {
   const dir = await ensureDevDir(userId);
-  const dest = dir.createFile(`${workoutId}.jpg`, 'image/jpeg');
+  const dest = dir.createFile(`${baseName}.jpg`, 'image/jpeg');
   await new File(sourceUri).copy(dest, { overwrite: true });
   return {
-    id: workoutId,
+    id: baseName,
     userId,
     localUri: dest.uri,
     capturedAt: new Date().toISOString(),
@@ -79,15 +81,22 @@ async function storeDevPhoto(
 // Row → display shape
 // ---------------------------------------------------------------------------
 
-function rowToLog(row: WorkoutRow, photoUri: string, authorName: string): WorkoutLog {
+function rowToLog(
+  row: WorkoutRow,
+  authorName: string,
+  uris: { selfie: string; env: string },
+): WorkoutLog {
   return {
     id: row.id,
     userId: row.user_id,
     photoPath: row.photo_path, // ALWAYS the storage path / dev file — never a URL
+    photoEnv: row.photo_env ?? '', // '' = legacy row (pre dual-capture)
     loggedAt: row.logged_at,
     workoutType: row.workout_type,
+    caption: row.caption ?? null,
     authorName,
-    photoUri,
+    photoUri: uris.selfie,
+    photoEnvUri: uris.env,
   };
 }
 
@@ -197,11 +206,11 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
     const logs = allRows
       .filter(inWeek)
       .map((r) =>
-        rowToLog(
-          r,
-          r.photo_path, // DEV: photo_path is a local file URI — display directly
-          authorName(r.user_id),
-        ),
+        rowToLog(r, authorName(r.user_id), {
+          // DEV: photo_path / photo_env are local file URIs — display directly
+          selfie: r.photo_path,
+          env: r.photo_env ?? '',
+        }),
       )
       .sort((a, b) => (a.loggedAt < b.loggedAt ? 1 : -1));
     // The member who STARTED the group: the admin seat (dev mirror of
@@ -241,7 +250,7 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
 
   const { data: rows, error: rowsError } = await supabase
     .from('workouts')
-    .select('id, user_id, photo_path, logged_at, workout_type, created_at')
+    .select('id, user_id, photo_path, photo_env, caption, logged_at, workout_type, created_at')
     .in('user_id', allUserIds)
     .order('logged_at', { ascending: false });
   if (rowsError) return { ok: false, error: rowsError.message };
@@ -294,7 +303,11 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
     return !Number.isNaN(t.getTime()) && t >= weekStart && t < weekEnd;
   };
   const weekRows = (rows ?? []).filter(inWeek);
-  const signed = await createSignedUrls(weekRows.map((r) => r.photo_path));
+  // Signed URLs for BOTH live shots in one batch (selfie + environment path).
+  const photoPaths = weekRows.flatMap((r) =>
+    [r.photo_path, r.photo_env].filter((p): p is string => typeof p === 'string' && p.length > 0),
+  );
+  const signed = await createSignedUrls(photoPaths);
 
   const ownWeek = (rows ?? []).filter((r) => r.user_id === session.user.id && inWeek(r));
   return {
@@ -303,7 +316,12 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
       weeklyGoal,
       weekStartDay,
       logs: weekRows
-        .map((r) => rowToLog(r, signed.get(r.photo_path) ?? '', authorName(r.user_id)))
+        .map((r) =>
+          rowToLog(r, authorName(r.user_id), {
+            selfie: signed.get(r.photo_path) ?? '',
+            env: r.photo_env ? (signed.get(r.photo_env) ?? '') : '',
+          }),
+        )
         .sort((a, b) => (a.loggedAt < b.loggedAt ? 1 : -1)),
       members,
       teamName,
@@ -318,8 +336,15 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
 // ---------------------------------------------------------------------------
 
 export interface NewWorkout {
-  /** Absolute URI of the captured photo (from expo-camera). */
+  /** Absolute URI of the captured SELFIE photo (from expo-camera; already
+   * filter-baked by selfieBake.ts when a filter is active). */
   photoUri: string;
+  /** Absolute URI of the captured ENVIRONMENT photo (2nd live shot — always
+   * unfiltered). Required: the v1.0 dual-capture flow always captures both. */
+  photoEnvUri: string;
+  /** Optional caption — ≤140 chars (product cap; UI enforces at input, DB
+   * check constraint enforces at insert in REAL mode). Trimmed to null. */
+  caption?: string | null;
   workoutType?: WorkoutType | null;
 }
 
@@ -330,10 +355,12 @@ export interface LogWorkoutResult {
 }
 
 /**
- * Persist ONE workout proof. Under-10s target: capture → (this) → Home.
- * REAL: upload to `${user_id}/${workout_id}.jpg` with the auth token, then
- * insert a workouts row; both are scoped by RLS to auth.uid().
- * DEV: copy photo to per-user cache folder + record through devMock.
+ * Persist ONE workout proof (dual-capture: selfie + environment + optional
+ * caption). Under-10s target: capture → (this) → Home.
+ * REAL: upload both shots to `${user_id}/${workoutId}.jpg` and
+ * `${user_id}/${workoutId}-env.jpg` with the auth token, then insert a
+ * workouts row carrying both paths + caption; all scoped by RLS to auth.uid().
+ * DEV: copy both photos to the per-user cache folder + record through devMock.
  */
 export async function logWorkout(input: NewWorkout): Promise<LogWorkoutResult> {
   const session = await getStoredSession();
@@ -341,10 +368,14 @@ export async function logWorkout(input: NewWorkout): Promise<LogWorkoutResult> {
 
   const workoutId = newWorkoutId();
   const now = new Date().toISOString();
+  const caption = input.caption?.trim() ? input.caption.trim().slice(0, 140) : null;
 
   if (session.isDevMode || !supabase) {
     try {
-      const photo = await storeDevPhoto(session.user.id, workoutId, input.photoUri);
+      const [photo, envPhoto] = await Promise.all([
+        storeDevPhoto(session.user.id, workoutId, input.photoUri),
+        storeDevPhoto(session.user.id, `${workoutId}-env`, input.photoEnvUri),
+      ]);
       const profile = await devMock.getProfile(session.user.id);
       const row: WorkoutRow = {
         id: workoutId,
@@ -354,6 +385,8 @@ export async function logWorkout(input: NewWorkout): Promise<LogWorkoutResult> {
         // backend — this row shape matches the real table).
         group_id: DEV_PAIR_GROUP_ID,
         photo_path: photo.localUri,
+        photo_env: envPhoto.localUri,
+        caption,
         logged_at: now,
         workout_type: input.workoutType ?? null,
         created_at: now,
@@ -363,8 +396,8 @@ export async function logWorkout(input: NewWorkout): Promise<LogWorkoutResult> {
         ok: true,
         log: rowToLog(
           row,
-          photo.localUri,
           profile?.name ?? session.user.email.split('@')[0] ?? 'You',
+          { selfie: photo.localUri, env: envPhoto.localUri },
         ),
       };
     } catch (e) {
@@ -373,29 +406,38 @@ export async function logWorkout(input: NewWorkout): Promise<LogWorkoutResult> {
   }
 
   // REAL mode — upload with the user's auth token; the storage policy
-  // requires the object to live under `${auth.uid()}/`.
+  // requires both objects to live under `${auth.uid()}/`.
   try {
+    // Narrowed client for closures (TS doesn't carry the !supabase guard into
+    // the async `upload` helper below).
+    const client = supabase;
     const photoPath = `${session.user.id}/${workoutId}.jpg`;
-    const file = new File(input.photoUri);
-    const { error: uploadError } = await supabase.storage
-      .from(WORKOUT_BUCKET)
-      .upload(photoPath, file as unknown as Blob, { contentType: 'image/jpeg', cacheControl: '3600' });
-    if (uploadError) return { ok: false, error: uploadError.message };
+    const envPath = `${session.user.id}/${workoutId}-env.jpg`;
+    const upload = async (path: string, uri: string) => {
+      const file = new File(uri);
+      return client.storage
+        .from(WORKOUT_BUCKET)
+        .upload(path, file as unknown as Blob, { contentType: 'image/jpeg', cacheControl: '3600' });
+    };
+    const [selfieUpload, envUpload] = await Promise.all([upload(photoPath, input.photoUri), upload(envPath, input.photoEnvUri)]);
+    if (selfieUpload.error) return { ok: false, error: selfieUpload.error.message };
+    if (envUpload.error) return { ok: false, error: envUpload.error.message };
 
     const { data: row, error: insertError } = await supabase
       .from('workouts')
       .insert({
         user_id: session.user.id,
         photo_path: photoPath,
+        photo_env: envPath,
+        caption,
         workout_type: input.workoutType ?? null,
         logged_at: now,
       })
-      .select('id, photo_path, logged_at, workout_type')
+      .select('id, photo_path, photo_env, caption, logged_at, workout_type')
       .single();
     if (insertError) return { ok: false, error: insertError.message };
 
-    const signedUrl = (await supabase.storage.from(WORKOUT_BUCKET).createSignedUrl(photoPath, 3600))
-      .data?.signedUrl ?? '';
+    const signed = await createSignedUrls([photoPath, envPath]);
 
     return {
       ok: true,
@@ -404,12 +446,14 @@ export async function logWorkout(input: NewWorkout): Promise<LogWorkoutResult> {
           id: row.id,
           user_id: session.user.id,
           photo_path: row.photo_path,
+          photo_env: row.photo_env,
+          caption: row.caption,
           logged_at: row.logged_at,
           workout_type: row.workout_type,
           created_at: row.logged_at,
         },
-        signedUrl,
         session.user.email.split('@')[0] ?? 'You',
+        { selfie: signed.get(photoPath) ?? '', env: signed.get(envPath) ?? '' },
       ),
     };
   } catch (e) {
@@ -430,11 +474,12 @@ export interface RemoveWorkoutResult {
  * Delete ONE workout proof — OWNER ONLY, hard requirement: the caller must be
  * the workout's author (auth-uid matching is enforced in REAL mode by RLS on
  * the `workouts` table; the DEV mock deletes only from the user's OWN key
- * space + own photo file, so photo isolation is untouched either way).
+ * space + own photo files, so photo isolation is untouched either way).
+ * Deletes BOTH live shots (selfie + environment).
  *
  * DEV: removes the row from `workouts:{userId}` and deletes the local photo
- * file (per-user cache folder) if the path resolves to one.
- * REAL: deletes the storage object then the row, both scoped by RLS to
+ * files (per-user cache folder) if the paths resolve to one.
+ * REAL: deletes the storage objects then the row, both scoped by RLS to
  * auth.uid() — a partner can never delete someone else's photo.
  */
 export async function removeWorkout(workoutId: string): Promise<RemoveWorkoutResult> {
@@ -448,34 +493,38 @@ export async function removeWorkout(workoutId: string): Promise<RemoveWorkoutRes
     const row = rows[idx];
     rows.splice(idx, 1);
     await devMock.saveWorkouts(session.user.id, rows);
-    // Delete the local proof file if it lives in this user's dev photo dir
+    // Delete the local proof files if they live in this user's dev photo dir
     // (never touches another user's folder — isolation intact).
-    if (row.photo_path && row.photo_path.includes(`spotter-dev-mock-photos/${session.user.id}/`)) {
-      try {
-        const f = new File(row.photo_path);
-        if (f.exists) f.delete();
-      } catch {
-        // File already missing — row deletion still stands.
+    const ownDir = `spotter-dev-mock-photos/${session.user.id}/`;
+    for (const p of [row.photo_path, row.photo_env ?? '']) {
+      if (p && p.includes(ownDir)) {
+        try {
+          const f = new File(p);
+          if (f.exists) f.delete();
+        } catch {
+          // File already missing — row deletion still stands.
+        }
       }
     }
     return { ok: true };
   }
 
-  // REAL mode: delete the private-bucket object (scoped to auth.uid() by the
+  // REAL mode: delete the private-bucket objects (scoped to auth.uid() by the
   // storage policy) then the row (scoped by workouts RLS). Photo isolation is
-  // preserved: the path is always `${auth.uid()}/...`, so a partner can only
-  // ever reach their OWN objects.
+  // preserved: both paths are always `${auth.uid()}/...`, so a partner can
+  // only ever reach their OWN objects.
   try {
     const { data: row } = await supabase
       .from('workouts')
-      .select('photo_path')
+      .select('photo_path, photo_env')
       .eq('id', workoutId)
       .eq('user_id', session.user.id)
       .maybeSingle();
     if (!row) return { ok: false, error: 'That log is already gone.' };
+    const paths = [row.photo_path, row.photo_env ?? ''].filter((p) => p.length > 0);
     const { error: storageError } = await supabase.storage
       .from(WORKOUT_BUCKET)
-      .remove([row.photo_path]);
+      .remove(paths);
     if (storageError) return { ok: false, error: storageError.message };
     const { error: deleteError } = await supabase
       .from('workouts')

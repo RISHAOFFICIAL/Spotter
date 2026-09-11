@@ -126,16 +126,22 @@ await step('b. A generates invite code (DEV-XXXX-XXXX) + pre-signup generation p
   console.log(`        code: ${invite.displayCode}`);
 });
 
-await step('c. A logs a workout (photo path scoped per user)', async () => {
+await step('c. A logs a workout (photo paths scoped per user, caption round-trip)', async () => {
   const { File, _root, _ensureFile } = fsMod;
   const shot = new File(path.join(_root, RUN_ID, 'fake-shot-a.jpg'));
+  const envShot = new File(path.join(_root, RUN_ID, 'fake-env-a.jpg'));
   _ensureFile(shot);
-  const res = await logWorkout({ photoUri: shot.uri, workoutType: 'Run' });
+  _ensureFile(envShot);
+  // Dual-capture shape: BOTH live shots are required now (S4b-1).
+  const res = await logWorkout({ photoUri: shot.uri, photoEnvUri: envShot.uri, caption: 'Hill sprints', workoutType: 'Run' });
   ok(res.ok, `logWorkout failed: ${res.error}`);
   const log = res.log;
   ok(log && log.userId === userA.id, 'log author not A');
-  ok(log.photoPath.includes('spotter-dev-mock-photos') && log.photoPath.includes(userA.id), `photo not per-user scoped: ${log.photoPath}`);
-  console.log(`        log ${log.id} photo path: ${log.photoPath}`);
+  ok(log.photoPath.includes('spotter-dev-mock-photos') && log.photoPath.includes(userA.id), `selfie not per-user scoped: ${log.photoPath}`);
+  ok(log.photoEnv && log.photoEnv.includes('spotter-dev-mock-photos') && log.photoEnv.includes(userA.id), `env photo not per-user scoped: ${log.photoEnv}`);
+  ok(log.photoEnv.includes('-env'), `env photo missing -env marker: ${log.photoEnv}`);
+  ok(log.caption === 'Hill sprints', `caption round-trip failed: ${log.caption}`);
+  console.log(`        log ${log.id} selfie ${log.photoPath} + env ${log.photoEnv} (caption kept)`);
 });
 
 await step('d. User B resolves invite → inviter name + has-logs flag', async () => {
@@ -170,8 +176,10 @@ await step('e. Accept: pair group + BOTH memberships (inviter keeps 4, invitee d
 await step('f. B logs → weekly context contains BOTH A and B logs', async () => {
   const { File, _root, _ensureFile } = fsMod;
   const shot = new File(path.join(_root, RUN_ID, 'fake-shot-b.jpg'));
+  const envShot = new File(path.join(_root, RUN_ID, 'fake-env-b.jpg'));
   _ensureFile(shot);
-  const res = await logWorkout({ photoUri: shot.uri, workoutType: 'Lift' });
+  _ensureFile(envShot);
+  const res = await logWorkout({ photoUri: shot.uri, photoEnvUri: envShot.uri, workoutType: 'Lift' });
   ok(res.ok, `B logWorkout failed: ${res.error}`);
   const ctx = await fetchWeeklyContext();
   ok(ctx.ok, `fetchWeeklyContext failed: ${ctx.error}`);

@@ -120,6 +120,11 @@ export interface Database {
           group_id: string | null;
           /** Storage path inside the private `workouts` bucket — NEVER a public URL. */
           photo_path: string;
+          /** Environment-shot storage path (v1.0 dual-capture, 2nd live shot —
+           * always unfiltered). NULL on legacy rows predating dual-capture. */
+          photo_env: string | null;
+          /** Optional caption — NULL or 1–140 chars (DB check constraint). */
+          caption: string | null;
           /** Server-set on insert (default now()); the photo's proof timestamp. */
           logged_at: string;
           workout_type: string | null;
@@ -130,6 +135,8 @@ export interface Database {
           user_id: string;
           group_id?: string | null;
           photo_path: string;
+          photo_env?: string | null;
+          caption?: string | null;
           logged_at?: string;
           workout_type?: string | null;
           created_at?: string;
@@ -139,6 +146,8 @@ export interface Database {
           user_id?: string;
           group_id?: string | null;
           photo_path?: string;
+          photo_env?: string | null;
+          caption?: string | null;
           logged_at?: string;
           workout_type?: string | null;
           created_at?: string;
