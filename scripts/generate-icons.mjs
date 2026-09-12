@@ -21,7 +21,13 @@ const ROOT = resolve(__dirname, '..');
 const SRC = join(ROOT, 'assets', 'branding', 'icon-source.png');
 const OUT = join(ROOT, 'assets', 'generated', 'icons');
 
-const BG = '#0A0C08'; // tokens: colors.background.base
+// Light palette (owner 2026-09-11): paper field (#F4F5EE), volt arc (#C6F135)
+// with a gap, dark ring track (#121408). Ring/arc/track are baked into the
+// source PNG; these constants only cover the adaptive-icon layers:
+//  - BG: adaptive background slab + flatten base behind the foreground = paper.
+//  - FG/MONO: informational (volt / white), kept for reference; the source PNG
+//    carries the ring geometry. The monochrome layer is a grayscale tint.
+const BG = '#F4F5EE'; // tokens: colors.background.base (paper)
 const FG = '#C6F135'; // tokens: colors.brand.primary (volt)
 const MONO = '#FFFFFF';
 
