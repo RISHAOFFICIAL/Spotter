@@ -21,7 +21,7 @@
       "package": "app.spotter.mvp",
       "icon": "./assets/branding/icon-source.png",
       "adaptiveIcon": {
-        "backgroundColor": "#0A0C08",
+        "backgroundColor": "#F4F5EE",
         "foregroundImage": "./assets/branding/icon-source.png",
         "monochromeImage": "./assets/generated/icons/android/mipmap-xxxhdpi/ic_launcher_monochrome.png"
       },
@@ -37,7 +37,7 @@
         "expo-notifications",
         {
           "icon": "./assets/generated/icons/android/mipmap-xxxhdpi/ic_launcher_monochrome.png",
-          "color": "#0A0C08",
+          "color": "#F4F5EE",
           "defaultChannel": "spotter-pair",
           "mode": "development"
         }
@@ -45,11 +45,11 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#0A0C08",
+          "backgroundColor": "#F4F5EE",
           "image": "./assets/branding/splash-source.png",
           "imageWidth": 200,
           "dark": {
-            "backgroundColor": "#0A0C08",
+            "backgroundColor": "#F4F5EE",
             "image": "./assets/branding/splash-source.png"
           }
         }
