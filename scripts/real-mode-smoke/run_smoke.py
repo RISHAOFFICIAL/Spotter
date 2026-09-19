@@ -831,6 +831,42 @@ if LEDGER_LIVE and RUN_FLOW8:
             rec("9-cleanup", f"{role} auth user gone", "PASS" if gone else "FAIL", f"HTTP {st}: {short(b)}")
 else:
     rec("9-ledger", "Flow 9 ledger (pair-private)", SKIP, "gated: ledger RPCs not live (anon probe != auth required) or S1 off")
+
+# ---------------- FLOW 10: APP DIAGNOSTICS (build-18 crash breadcrumb) ----------------
+# app_diagnostics is insert-only for anon + authenticated (a crash can fire
+# before sign-in, so both roles must be able to append) with NO client read/
+# update/delete. Uses a dedicated fresh account so the assertions never depend
+# on the gated flows 8/9 having run.
+def f10_diag_now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+DIAG = None
+st, b = req("POST", "/auth/v1/signup", token=None, body={"email": f"realsmoke-{epoch}-dx@example.com", "password": PW})
+if st == 200 and isinstance(b, dict) and b.get("access_token"):
+    DIAG = {"id": b["user"]["id"], "token": b["access_token"]}
+    rec("10-diagnostics", "diagnostics signup", PASS, f"HTTP {st}")
+else:
+    rec("10-diagnostics", "diagnostics signup", FAIL, f"HTTP {st}: {short(b)}")
+
+if DIAG:
+    st, b = req("POST", "/rest/v1/app_diagnostics", None, {"message": "smoke-anon", "stack": "at smoke", "app_version": "1.0.0", "build_number": "17", "ts": f10_diag_now()})
+    rec("10-diagnostics", "anon INSERT accepted (crash-before-signin)", "PASS" if st in (200, 201) else "FAIL", f"HTTP {st}: {short(b)}")
+    st, b = req("POST", "/rest/v1/app_diagnostics", DIAG["token"], {"message": "smoke-auth", "app_version": "1.0.0", "build_number": "17", "ts": f10_diag_now()})
+    rec("10-diagnostics", "authenticated INSERT accepted", "PASS" if st in (200, 201) else "FAIL", f"HTTP {st}: {short(b)}")
+    st, b = req("GET", "/rest/v1/app_diagnostics", DIAG["token"])
+    no_read = (st == 200 and isinstance(b, list) and len(b) == 0) or st in (401, 403)
+    rec("10-diagnostics", "client SELECT blocked (insert-only)", "PASS" if no_read else "FAIL", f"HTTP {st}: {short(b)}")
+    st, b = req("DELETE", "/rest/v1/app_diagnostics?id=eq.00000000-0000-0000-0000-000000000000", DIAG["token"])
+    # No DELETE policy exists (insert-only), so RLS default-denies the DELETE:
+    # PostgREST returns 204 (0 rows affected), not 403 — same filtered-out
+    # semantics as a SELECT that returns [].
+    rec("10-diagnostics", "client DELETE RLS-filtered to 0 rows (insert-only)", "PASS" if st in (204, 401, 403) else "FAIL", f"HTTP {st}: {short(b)}")
+    st, b = req("POST", "/rest/v1/rpc/delete_account", DIAG["token"], {})
+    rec("10-cleanup", "diagnostics delete_account", "PASS" if st in (200, 204) else "FAIL", f"HTTP {st}: {short(b)}")
+    st, b = req("GET", "/auth/v1/user", DIAG["token"])
+    gone = st == 401 or (st == 403 and isinstance(b, dict) and b.get("error_code") == "user_not_found")
+    rec("10-cleanup", "diagnostics auth user gone", "PASS" if gone else "FAIL", f"HTTP {st}: {short(b)}")
+
 with open("/tmp/smoke-results.json", "w") as f:
     json.dump({"epoch": epoch, "emails": EMAILS, "results": RESULTS}, f, indent=2)
 print("\nSUMMARY:", sum(1 for r in RESULTS if r["status"] == "PASS"), "PASS /", sum(1 for r in RESULTS if r["status"] == "FAIL"), "FAIL /", sum(1 for r in RESULTS if r["status"] == SKIP), "SKIPPED")

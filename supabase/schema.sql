@@ -925,6 +925,28 @@ create policy "analytics_events_insert_own" on public.analytics_events
   for insert to authenticated
   with check (user_id is null or auth.uid() = user_id);
 
+-- app_diagnostics: first-party crash breadcrumb (build-18 diagnostics). One row
+-- per reported JS error/unhandled rejection: message + stack + app version +
+-- build number + timestamp. NO PII beyond the error content itself — no user
+-- id, name, email, install id, or session id (a crash may fire before sign-in,
+-- so anon must be able to append). Insert-only for anon + authenticated; there
+-- is deliberately NO client SELECT/UPDATE/DELETE policy — reads are service-role
+-- only (dashboards), mirroring analytics_events.
+create table if not exists public.app_diagnostics (
+  id uuid primary key default gen_random_uuid(),
+  message text not null,
+  stack text,
+  app_version text,
+  build_number text,
+  ts timestamptz not null default now()
+);
+alter table public.app_diagnostics enable row level security;
+create index if not exists app_diagnostics_ts_idx
+  on public.app_diagnostics (ts desc);
+create policy "app_diagnostics_insert_anon_authenticated" on public.app_diagnostics
+  for insert to anon, authenticated
+  with check (true);
+
 -- weekly_results: one finalized snapshot row per (user, group, week). Written
 -- once when the week fully elapses (finalize-on-fetch); UNIQUE guards races.
 -- weekly_goal_snapshot is the goal AT FINALIZE TIME (documented v1.1
