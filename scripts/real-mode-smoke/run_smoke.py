@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""SPOTTER real-mode smoke test — anon key + normal signup only. No service_role.
+"""SPOTTER real-mode smoke test — anon key + normal signup only.
+
+SERVICE-ROLE POLICY: every functional assertion still runs as anon/authenticated
+with the public keys — the service role is NEVER used to exercise app behavior.
+It is used for exactly one thing: post-hoc verification that a client write was
+really filtered out by RLS. A client DELETE that RLS filters to 0 rows answers
+`204` — indistinguishable from a DELETE that genuinely removed a row — so the
+denial can only be proven from *outside* the client's own view. If the key is
+absent those checks report SKIPPED rather than silently passing.
 
 STORAGE-CACHE note (2026-09-19, post-leave photo isolation):
 Raw authenticated object GETs (`GET /storage/v1/object/workouts/<uid>/<file>`) are cached
@@ -29,6 +37,10 @@ def load_env():
 ENV = load_env()
 URL = ENV["EXPO_PUBLIC_SUPABASE_URL"].rstrip("/")
 ANON = ENV["EXPO_PUBLIC_SUPABASE_ANON_KEY"]
+# Service-role key, used ONLY for out-of-band verification of client denials
+# (see the SERVICE-ROLE POLICY note above). Read from the process environment so
+# it is never committed to the repo's .env.
+SR = os.environ.get("ServiceRoleSupabase") or ENV.get("ServiceRoleSupabase")
 
 RESULTS = []
 
@@ -36,9 +48,11 @@ def rec(flow, name, status, detail):
     RESULTS.append({"flow": flow, "name": name, "status": status, "detail": detail})
     print(f"[{status}] {flow} :: {name} :: {detail}", flush=True)
 
-def req(method, path, token=None, body=None, ctype="application/json", raw=False):
+def req(method, path, token=None, body=None, ctype="application/json", raw=False, extra_headers=None):
     """Return (status, parsed_body). parsed_body = python obj or raw bytes."""
     h = {"apikey": ANON, "Authorization": f"Bearer {token}"} if token else {"apikey": ANON}
+    if extra_headers:
+        h.update(extra_headers)
     if body is not None and not raw:
         h["Content-Type"] = ctype
         data = json.dumps(body).encode()
@@ -47,6 +61,34 @@ def req(method, path, token=None, body=None, ctype="application/json", raw=False
         data = body
     else:
         data = None
+    r = urllib.request.Request(URL + path, data=data, headers=h, method=method)
+    try:
+        with urllib.request.urlopen(r, timeout=30) as resp:
+            rawbody = resp.read()
+            try:
+                return resp.status, json.loads(rawbody) if rawbody else None
+            except Exception:
+                return resp.status, rawbody
+    except urllib.error.HTTPError as e:
+        rawbody = e.read()
+        try:
+            return e.code, json.loads(rawbody) if rawbody else None
+        except Exception:
+            return e.code, rawbody
+    except Exception as e:
+        return -1, str(e)
+
+def sr_req(method, path, body=None):
+    """Service-role request — bypasses RLS. Used ONLY to observe whether a client
+    write actually landed/was filtered; never to exercise app behavior.
+    Returns (status, parsed_body); status -1 means "no service-role key"."""
+    if not SR:
+        return -1, "ServiceRoleSupabase not set in env"
+    h = {"apikey": SR, "Authorization": f"Bearer {SR}"}
+    data = None
+    if body is not None:
+        h["Content-Type"] = "application/json"
+        data = json.dumps(body).encode()
     r = urllib.request.Request(URL + path, data=data, headers=h, method=method)
     try:
         with urllib.request.urlopen(r, timeout=30) as resp:
@@ -851,16 +893,33 @@ else:
 if DIAG:
     st, b = req("POST", "/rest/v1/app_diagnostics", None, {"message": "smoke-anon", "stack": "at smoke", "app_version": "1.0.0", "build_number": "17", "ts": f10_diag_now()})
     rec("10-diagnostics", "anon INSERT accepted (crash-before-signin)", "PASS" if st in (200, 201) else "FAIL", f"HTTP {st}: {short(b)}")
-    st, b = req("POST", "/rest/v1/app_diagnostics", DIAG["token"], {"message": "smoke-auth", "app_version": "1.0.0", "build_number": "17", "ts": f10_diag_now()})
+    # Unique per run so the service-role lookup below resolves exactly this row.
+    marker = f"smoke-delete-proof-{epoch}-{uuid.uuid4().hex[:8]}"
+    st, b = req("POST", "/rest/v1/app_diagnostics", DIAG["token"], {"message": marker, "app_version": "1.0.0", "build_number": "18", "ts": f10_diag_now()})
     rec("10-diagnostics", "authenticated INSERT accepted", "PASS" if st in (200, 201) else "FAIL", f"HTTP {st}: {short(b)}")
     st, b = req("GET", "/rest/v1/app_diagnostics", DIAG["token"])
     no_read = (st == 200 and isinstance(b, list) and len(b) == 0) or st in (401, 403)
     rec("10-diagnostics", "client SELECT blocked (insert-only)", "PASS" if no_read else "FAIL", f"HTTP {st}: {short(b)}")
-    st, b = req("DELETE", "/rest/v1/app_diagnostics?id=eq.00000000-0000-0000-0000-000000000000", DIAG["token"])
-    # No DELETE policy exists (insert-only), so RLS default-denies the DELETE:
-    # PostgREST returns 204 (0 rows affected), not 403 — same filtered-out
-    # semantics as a SELECT that returns [].
-    rec("10-diagnostics", "client DELETE RLS-filtered to 0 rows (insert-only)", "PASS" if st in (204, 401, 403) else "FAIL", f"HTTP {st}: {short(b)}")
+    # DELETE-SURVIVAL PROOF. With no DELETE policy, RLS filters the statement to
+    # 0 rows and PostgREST answers 204 — the same status a *successful* delete
+    # returns, so a 2xx on its own proves nothing. (Deleting a non-existent id,
+    # as this check used to, also answers 204 and proves even less.) Prove it
+    # from outside the client: resolve the real row as service_role, delete it
+    # as the client, then confirm as service_role that it is still there.
+    st, b = sr_req("GET", f"/rest/v1/app_diagnostics?message=eq.{marker}&select=id")
+    have_row = (st == 200 and isinstance(b, list) and len(b) == 1
+                and isinstance(b[0], dict) and bool(b[0].get("id")))
+    rec("10-diagnostics", "service_role resolves the inserted row (delete target)",
+        "PASS" if have_row else (SKIP if st == -1 else "FAIL"), f"HTTP {st}: {short(b)}")
+    if have_row:
+        did = b[0]["id"]
+        st, b = req("DELETE", f"/rest/v1/app_diagnostics?id=eq.{did}", DIAG["token"])
+        rec("10-diagnostics", "client DELETE of an existing row -> 204, RLS-filtered to 0 rows (insert-only)",
+            "PASS" if st == 204 else "FAIL", f"HTTP {st}: {short(b)}")
+        st, b = sr_req("GET", f"/rest/v1/app_diagnostics?id=eq.{did}&select=id")
+        survived = st == 200 and isinstance(b, list) and len(b) == 1
+        rec("10-diagnostics", "row SURVIVED the client DELETE (service_role count = 1)",
+            "PASS" if survived else (SKIP if st == -1 else "FAIL"), f"HTTP {st}: {short(b)}")
     st, b = req("POST", "/rest/v1/rpc/delete_account", DIAG["token"], {})
     rec("10-cleanup", "diagnostics delete_account", "PASS" if st in (200, 204) else "FAIL", f"HTTP {st}: {short(b)}")
     st, b = req("GET", "/auth/v1/user", DIAG["token"])
