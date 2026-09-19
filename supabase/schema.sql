@@ -353,6 +353,51 @@ $$;
 -- pair-scoped reads require an authenticated caller anyway.
 revoke all on function public.is_paired_with(uuid) from public;
 grant execute on function public.is_paired_with(uuid) to anon, authenticated;
+-- ---------------------------------------------------------------------------
+-- Workout-PHOTO read predicate (2026-09-19 — post-leave photo isolation).
+-- The storage read policy below no longer calls is_paired_with directly: photo
+-- access is pinned here, in one explicit statement of the CURRENT-membership
+-- requirement. Both sides must hold a memberships row in the SAME shared group
+-- (>= 2 seats) at query time; leave_group()/delete_account() DELETE the leaver's
+-- seat, so a departed member can never match (verified live: after C leaves a
+-- 3-seat group, can_read_workout_photo('<A>/x.jpg') = false for C and
+-- storage.objects shows 0 rows under A's prefix to C). Purpose-built rather than
+-- reusing the pair-era helper so a future edit to the pair feed can never widen
+-- photo visibility by accident. A key whose prefix is not a uuid returns false
+-- (object invisible) instead of raising the inline cast error.
+create or replace function public.can_read_workout_photo(p_name text)
+returns boolean
+language plpgsql
+security definer
+stable
+set search_path = public
+as $fn$
+declare
+  owner_id uuid;
+begin
+  if auth.uid() is null then
+    return false;
+  end if;
+  begin
+    owner_id := split_part(p_name, '/', 1)::uuid;
+  exception when others then
+    return false;  -- not a `<user_id>/...` object key: no cross-user read
+  end;
+  return exists (
+    select 1
+    from public.memberships mine
+    join public.memberships theirs on theirs.group_id = mine.group_id
+    where mine.user_id = auth.uid()
+      and theirs.user_id = owner_id
+      and mine.user_id <> theirs.user_id
+      and (select count(*) from public.memberships m where m.group_id = mine.group_id) >= 2
+  );
+end
+$fn$;
+-- Granted to anon too ONLY so anonymous policy evaluation resolves the function
+-- (it still returns false for anon — auth.uid() is null).
+revoke all on function public.can_read_workout_photo(text) from public;
+grant execute on function public.can_read_workout_photo(text) to anon, authenticated;
 
 -- A user may now SELECT a workout authored by a co-member of their shared
 -- group (a 2-member group = today's pair). Own-row select policy above still
@@ -365,14 +410,17 @@ create policy "workouts_select_group" on public.workouts
     and public.is_paired_with(user_id)
   );
 
--- Group-scoped storage READ: a user may sign URLs for objects under a
+-- Group-scoped storage READ: a user may sign URLs for / read objects under a
 -- co-member's `${user_id}/` prefix (still never public-read, still
 -- signed-URL-only). Write/delete under other prefixes stay forbidden.
+-- The membership test is public.can_read_workout_photo (defined above): CURRENT
+-- members of the same group only, evaluated per request, so a member who has
+-- left the group reads nothing of their former co-members' photos.
 create policy "workouts_storage_read_group" on storage.objects
   for select using (
     bucket_id = 'workouts'
     and auth.role() = 'authenticated'
-    and public.is_paired_with(split_part(name, '/', 1)::uuid)
+    and public.can_read_workout_photo(name)
   );
 
 -- Group-scoped read of a co-member's users row (names in the feed; the app
