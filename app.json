@@ -9,9 +9,9 @@
     "userInterfaceStyle": "light",
     "backgroundColor": "#F4F5EE",
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
       "bundleIdentifier": "app.spotter.mvp",
-      "buildNumber": "1",
+      "buildNumber": "17",
       "infoPlist": {
         "NSCameraUsageDescription": "SPOTTER uses your camera to capture photo proof of your workouts — a live selfie and a shot of your surroundings. Photos are sealed to your account — only you and your group can ever see them.",
         "NSUserNotificationsUsageDescription": "SPOTTER lets you know when your partner logs a workout and when your invite is accepted. You control every notification type."
@@ -39,7 +39,7 @@
           "icon": "./assets/generated/icons/android/mipmap-xxxhdpi/ic_launcher_monochrome.png",
           "color": "#F4F5EE",
           "defaultChannel": "spotter-pair",
-          "mode": "development"
+          "mode": "production"
         }
       ],
       [
@@ -64,7 +64,7 @@
     ],
     "experiments": {
       "typedRoutes": true,
-      "reactCompiler": true
+      "reactCompiler": false
     },
     "extra": {
       "router": {},
