@@ -76,7 +76,11 @@ export function WeeklyRing({
         const u = 1 - t;
         return (3 * u * u * t * c1 + 3 * u * t * t * c3 + t * t * t * c2) / (3 * u * u * t + 3 * u * t * t + t * t * t);
       },
-      useNativeDriver: true,
+      // JS-driven: the native driver only supports transform/opacity. Driving
+      // the SVG `strokeDashoffset` prop with useNativeDriver:true is unsupported
+      // and can throw at runtime on the New Architecture (RN 0.86). The value
+      // still animates identically via the Animated.Value on the JS thread.
+      useNativeDriver: false,
     }).start();
   }, [fraction, progress]);
 

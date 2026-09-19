@@ -250,6 +250,33 @@ export interface Database {
           },
         ];
       };
+      app_diagnostics: {
+        Row: {
+          id: string;
+          message: string;
+          stack: string | null;
+          app_version: string | null;
+          build_number: string | null;
+          ts: string;
+        };
+        Insert: {
+          id?: string;
+          message: string;
+          stack?: string | null;
+          app_version?: string | null;
+          build_number?: string | null;
+          ts?: string;
+        };
+        Update: {
+          id?: string;
+          message?: string;
+          stack?: string | null;
+          app_version?: string | null;
+          build_number?: string | null;
+          ts?: string;
+        };
+        Relationships: [];
+      };
       analytics_events: {
         Row: {
           id: string;

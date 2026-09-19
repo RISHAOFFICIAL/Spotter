@@ -9,7 +9,12 @@ import { Stack, type NativeStackNavigationOptions } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 
 import { AuthProvider, SplashLoading, useAuth } from '@/features/auth/AuthProvider';
+import { installGlobalErrorHandlers } from '@/lib/diagnostics';
 import { colors } from '@/theme/tokens';
+
+// Install the first-party crash breadcrumb BEFORE the first render can throw.
+// Idempotent; wraps (does not replace) the default RN error handlers.
+installGlobalErrorHandlers();
 
 // Base background for every screen's content area (light theme only). The
 // inline object literal loses `backgroundColor` through RN 0.86's strict-api
