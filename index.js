@@ -1,5 +1,5 @@
 /**
- * SPOTTER root entry — DIAGNOSTIC BUILD ONLY (build 20, branch diag/boot-error-black-box).
+ * SPOTTER root entry — DIAGNOSTIC BUILD ONLY (builds 20-21, branch diag/boot-error-black-box).
  *
  * package.json "main" points here instead of "expo-router/entry" for exactly one reason:
  * the boot black box must be installed BEFORE expo-router (and therefore every route
@@ -29,4 +29,9 @@ try {
   // A synchronous import-time throw used to be an instant SIGABRT (RN's fatal path).
   // Report it through the same channel as an uncaught error, and keep the process alive.
   blackBox.reportBootThrow(error, 'requiring-router');
+  // Build 21: React never mounted, so there is no screen to render and an Alert may never be
+  // presented. Register a bare react-native fallback root view that prints EVERY captured
+  // error on screen — so one install shows the evidence even if Alert timing never works.
+  blackBox.renderFallbackApp();
+  blackBox.setBootPhase('fallback-rendered');
 }

@@ -151,15 +151,45 @@ export function installGlobalErrorHandlers(): void {
 
   // 2. New-Architecture native hook (RN 0.86+): uncaught runtime errors and
   //    unhandled promise rejections route through here.
+  //
+  // DO NOT "simplify" this back to `if (typeof rnHandle === 'function') g.RN$handleException = ...`.
+  // React Native installs this global with defineReadOnlyGlobal()
+  // (ReactCommon/react/utils/jsi-utils.cpp -> Object.defineProperty(global, name, {value}),
+  // i.e. writable:false, configurable:false; called from
+  // ReactCommon/react/runtime/ReactInstance.cpp for "RN$handleException"), and Metro emits
+  // "use strict" for every ESM module — so a bare assignment throws a TypeError at *module
+  // scope*, i.e. during bundle evaluation. That is an uncaught boot error, which is exactly
+  // the reportException -> reportFatal -> RCTFatal -> SIGABRT abort that terminated builds
+  // 16, 17 and 18 ~0.3 s after launch. The typeof guard does not prevent it: the assignment
+  // only runs when the global IS there — and it is always there on a real device.
+  // Feature-detect writability and keep the write inside try/catch.
   const rnHandle = g.RN$handleException;
-  if (typeof rnHandle === 'function') {
-    g.RN$handleException = (error, isFatal, reportToConsole) => {
-      reportCrash(toMessage(error), toStack(error));
-      try {
-        return rnHandle(error, isFatal, reportToConsole);
-      } catch {
-        return undefined;
-      }
-    };
+  const rnHandleIsWritable = isWritableGlobal('RN$handleException');
+  if (typeof rnHandle === 'function' && rnHandleIsWritable) {
+    try {
+      g.RN$handleException = (error, isFatal, reportToConsole) => {
+        reportCrash(toMessage(error), toStack(error));
+        try {
+          return rnHandle(error, isFatal, reportToConsole);
+        } catch {
+          return undefined;
+        }
+      };
+    } catch {
+      /* read-only after all: hook 1 (ErrorUtils) still reports what it can */
+    }
+  }
+}
+
+/**
+ * True only when the global property can legally be assigned to. `Object.defineProperty`
+ * defaults are writable:false / configurable:false, which is how RN ships every RN$* global,
+ * so this is false on device and the caller must not assign.
+ */
+function isWritableGlobal(name: string): boolean {
+  try {
+    return Object.getOwnPropertyDescriptor(globalThis, name)?.writable === true;
+  } catch {
+    return false;
   }
 }
