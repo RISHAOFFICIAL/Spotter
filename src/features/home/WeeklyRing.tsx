@@ -74,7 +74,14 @@ export function WeeklyRing({
         const c3 = 0.36;
         const c4 = 1;
         const u = 1 - t;
-        return (3 * u * u * t * c1 + 3 * u * t * t * c3 + t * t * t * c2) / (3 * u * u * t + 3 * u * t * t + t * t * t);
+        // At t=0 the denominator is exactly 0 and so is the numerator, so the
+        // raw ratio is 0/0 = NaN — and one NaN frame poisons the Animated
+        // interpolation (the ring never draws). The curve's value at t=0 is 0,
+        // so return that; for every t>0 the denominator is > 0 and the result
+        // is bit-for-bit what it was before.
+        const denom = 3 * u * u * t + 3 * u * t * t + t * t * t;
+        if (denom === 0) return 0;
+        return (3 * u * u * t * c1 + 3 * u * t * t * c3 + t * t * t * c2) / denom;
       },
       // JS-driven: the native driver only supports transform/opacity. Driving
       // the SVG `strokeDashoffset` prop with useNativeDriver:true is unsupported
