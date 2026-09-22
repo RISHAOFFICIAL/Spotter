@@ -147,6 +147,59 @@ function guardPrototype(dotted, record) {
   return true;
 }
 
+function isHarnessCaller() {
+  const stack = String(new Error().stack || '').split('\n');
+  const caller = stack[2] || '';
+  return (
+    caller.includes('device-parity') ||
+    caller.includes('node:internal') ||
+    caller.includes('node:') ||
+    caller.includes('/node_modules/typescript/') ||
+    caller.includes('/node_modules/tslib/')
+  );
+}
+
+/**
+ * Hermes-absent GLOBALS cannot simply be deleted either: Node's own runtime needs
+ * them (deleting global Buffer makes Node's internal undici fail with
+ * "ReferenceError: Buffer is not defined" the first time anything touches fetch).
+ * So the global is replaced by an accessor that returns Node's original for the
+ * harness's own code and Node internals, and throws a device-like ReferenceError
+ * for every other caller (i.e. the app graph).
+ */
+function guardGlobal(name, record) {
+  const g = globalThis;
+  const desc = Object.getOwnPropertyDescriptor(g, name);
+  if (!desc) return false;
+  let original;
+  try {
+    original = g[name];
+  } catch (e) {
+    return false;
+  }
+  const getter = function guardedGlobal() {
+    if (isHarnessCaller()) return original;
+    const caller = String(new Error().stack || '').split('\n')[2] || '';
+    record.push({ what: 'global ' + name, caller: caller.trim() });
+    throw new ReferenceError(
+      name + ' is not defined: device parity — Hermes 0.86/RN 0.86 provide no global ' + name,
+    );
+  };
+  try {
+    Object.defineProperty(g, name, {
+      get: getter,
+      set(value) {
+        original = value; // the app's own shim (e.g. Buffer) still wins for later reads
+      },
+      configurable: true,
+      enumerable: desc.enumerable !== false,
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function installErrorUtils(record) {
   const g = globalThis;
   if (g.ErrorUtils && g.ErrorUtils.__parity) return;
@@ -257,9 +310,9 @@ function applyParityEnv(opts) {
       }
       continue;
     }
-    const ok = deletePath(g, name);
-    if (ok) applied.push('deleted ' + name + ' (' + confidence + ' confidence)');
-    else skipped.push({ name, why: 'already absent' });
+    const ok = guardGlobal(name, guarded);
+    if (ok) applied.push('guarded ' + name + ' (throws for app-graph callers, delegates for Node internals; ' + confidence + ' confidence)');
+    else skipped.push({ name, why: 'not a configurable global here' });
   }
   return { applied, skipped, guarded, decisions: DECISIONS, envFile: o.envFile, inlined: inlinedEnv };
 }
