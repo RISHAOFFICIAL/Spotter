@@ -21,7 +21,7 @@ RLS predicate evaluates to "no" for C (storage.objects -> 0 rows). Cache-relevan
 assertions therefore append `?cb=<random>` so the request reaches the origin decision;
 the plain-repeat status is reported in the detail text.
 """
-import json, os, re, glob, sys, time, uuid, urllib.request, urllib.error, base64, datetime
+import json, os, re, glob, sys, time, uuid, subprocess, urllib.request, urllib.error, base64, datetime
 
 ENV_PATH = "/home/team/shared/app/.env"
 
@@ -142,6 +142,43 @@ for stale_epoch in sorted(STALE_EPOCHS):
         # Stale-clean grew with the a–f letter set (up to ~2× the old auth burst);
         # space signins so the auth endpoint's rate bucket never trips flow 1.
         time.sleep(0.5)
+
+# ---------------- FLOW 0: STACK-CHILD RENDER GUARD (offline) ----------------
+# The build-18 P0 was a *render* fault: `_layout.tsx` handed <Stack> a React
+# fragment, expo-router's mapProtectedScreen stringifies children it does not
+# recognise, and a fragment's identity is a Symbol — `String(Symbol)` throws
+# inside the first render, which RN 0.86 makes fatal. Every other check in this
+# file (and every offline module-eval harness) was blind to it because nothing
+# here ever RENDERS a <Stack>.
+# scripts/smoke/stack-children-guard.cjs is the check that can see it: it
+# transpiles the REAL src/app/_layout.tsx, feeds the children it actually
+# produces to expo-router's REAL mapProtectedScreen, and proves the old fragment
+# shape throws exactly as the device did. It runs FIRST, before any network
+# flow (a network flow can `sys.exit(1)` early), so it always executes; its
+# results join RESULTS and feed the same summary/exit code as every other check.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+GUARD_SCRIPT = os.path.join(REPO_ROOT, "scripts", "smoke", "stack-children-guard.cjs")
+GUARD_CHECKS = 19  # every PASS/FAIL line the guard prints; a shrink is itself a failure
+print(f"[guard] node {GUARD_SCRIPT} (cwd={REPO_ROOT})", flush=True)
+try:
+    guard = subprocess.run(["node", GUARD_SCRIPT], cwd=REPO_ROOT,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           text=True, timeout=300)
+    guard_parsed = 0
+    for gline in (guard.stdout or "").splitlines():
+        gm = re.match(r"^(PASS|FAIL)\s+(.*?)(?:\s+::\s+(.*))?$", gline.rstrip())
+        if not gm:
+            continue
+        guard_parsed += 1
+        rec("0-stack-guard", gm.group(2).strip(), gm.group(1), (gm.group(3) or "").strip())
+    if guard_parsed == 0:
+        rec("0-stack-guard", "guard emitted PASS/FAIL lines", FAIL,
+            f"parsed 0 result lines, exit={guard.returncode}, stderr={short((guard.stderr or '').strip())}")
+    elif guard_parsed != GUARD_CHECKS:
+        rec("0-stack-guard", f"guard reported all {GUARD_CHECKS} checks", FAIL,
+            f"parsed {guard_parsed} result lines (exit={guard.returncode}) — the guard lost checks")
+except Exception as e:  # node missing / script missing / timeout — never a silent skip
+    rec("0-stack-guard", "guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
 
 # ---------------- FLOW 1: SIGNUP + SIGNIN ----------------
 users = {}
@@ -929,3 +966,6 @@ if DIAG:
 with open("/tmp/smoke-results.json", "w") as f:
     json.dump({"epoch": epoch, "emails": EMAILS, "results": RESULTS}, f, indent=2)
 print("\nSUMMARY:", sum(1 for r in RESULTS if r["status"] == "PASS"), "PASS /", sum(1 for r in RESULTS if r["status"] == "FAIL"), "FAIL /", sum(1 for r in RESULTS if r["status"] == SKIP), "SKIPPED")
+# The summary is the gate: any FAIL makes the whole run fail (the Stack-child
+# guard from flow 0 included), so CI/a caller can branch on the exit code alone.
+sys.exit(1 if any(r["status"] == FAIL for r in RESULTS) else 0)
