@@ -45,6 +45,15 @@
  *    counted own logs < goal comparison the weekly ring uses. A week whose
  *    reads could not be resolved is left UNTOUCHED (no entry, no flag) rather
  *    than guessed at.
+ *  - A completed week is only a MISS for someone who was actually there for it
+ *    (added 2026-09-23, below). `record_missed_promise` (schema.sql) checks the
+ *    caller's voice (a note), their group and their witness — it never compares
+ *    the week to when the caller JOINED. Without this guard a brand-new member
+ *    is handed the week before they installed the app as an Open miss their
+ *    partner can see: a false entry that shames someone for a week they never
+ *    had. Stated plainly, this is a CLIENT-side skip and not a schema change:
+ *    the launch window keeps supabase/schema.sql frozen, and the shipped build
+ *    has to be honest even if the database is never touched.
  *
  * NOTE ON THE IMPORT CYCLE: promises.ts already imports workoutStore (for the
  * ledger's member-name map), so wiring this into workoutStore makes
@@ -70,6 +79,8 @@ export type RolloverReason =
   | 'no_completed_week' // previous week not fully elapsed (defensive; see below)
   | 'goal_met' // the completed week MET the goal — nothing to record
   | 'already_processed' // this week was recorded on an earlier open (local flag)
+  | 'before_membership' // the week STARTED before this member joined the group — not their miss
+  | 'no_shared_group' // nobody to record against (the RPC would no-op) — nothing to do
   | 'unavailable'; // reads failed — retry on the next open, never guess
 
 export interface RolloverOutcome {
@@ -165,6 +176,45 @@ async function ownCompletedWeekMissed(
 }
 
 /**
+ * When did this user join the group the rollover would record against?
+ * Returns an ISO timestamp, `null` when they hold no shared group at all (the
+ * RPC would no-op, so there is nothing to record), or `'unavailable'` when it
+ * cannot be established — the caller then records NOTHING rather than risk a
+ * false miss (a possible false miss is worse than a delayed true one).
+ *
+ * The membership read follows the RPC's own rule (`record_missed_promise`
+ * resolves the caller's most recent membership in a group with >= 2 members),
+ * via `my_group()` — the same SECURITY DEFINER helper Home already uses. The
+ * client can read ONLY its own membership row (`memberships_select_own`), which
+ * is exactly the row in question; no other member's row is touched, and the
+ * pair-private read path is untouched.
+ */
+async function myMembershipJoinedAt(userId: string, useDevLocal: boolean): Promise<string | null | 'unavailable'> {
+  try {
+    if (useDevLocal || !supabase) {
+      const shared = await devMock.findSharedDevGroup(userId); // dev mirror of my_group()
+      if (!shared) return null;
+      const mine = shared.members.find((m) => m.user_id === userId);
+      return typeof mine?.created_at === 'string' ? mine.created_at : 'unavailable';
+    }
+    const { data: groupData, error: groupError } = await supabase.rpc('my_group');
+    if (groupError) return 'unavailable';
+    const groupId = (groupData as { group_id?: unknown } | null)?.group_id;
+    if (typeof groupId !== 'string' || groupId.length === 0) return null;
+    const { data: mine, error: memberError } = await supabase
+      .from('memberships')
+      .select('created_at')
+      .eq('user_id', userId)
+      .eq('group_id', groupId)
+      .maybeSingle();
+    if (memberError) return 'unavailable';
+    return typeof mine?.created_at === 'string' ? mine.created_at : 'unavailable';
+  } catch {
+    return 'unavailable';
+  }
+}
+
+/**
  * Record the previous fully-elapsed week as a promise entry when the maker
  * missed it and a promise is set. Safe to call on every weekly-context fetch:
  * it is idempotent per user+week per device, and it never records for a week
@@ -182,19 +232,33 @@ export async function recordMissedPromiseForCompletedWeek(
 ): Promise<RolloverOutcome> {
   const session = await getStoredSession();
   if (!session) return { ran: false, created: false, reason: 'no_session' };
+  const useDevLocal = session.isDevMode || !supabase;
 
   const range = previousWeekRange(now, weekStartDay);
   if (!range || now < range.end) return { ran: false, created: false, reason: 'no_completed_week' };
   const weekStartAt = range.start.toISOString();
 
   const goal = Math.min(7, Math.max(1, Math.round(weeklyGoal) || 3));
-  const missed = await ownCompletedWeekMissed(session.user.id, session.isDevMode || !supabase, range.start, range.end, goal);
+  const missed = await ownCompletedWeekMissed(session.user.id, useDevLocal, range.start, range.end, goal);
   if (missed === 'met') return { ran: false, created: false, weekStartAt, reason: 'goal_met' };
   if (missed === 'unresolved') return { ran: false, created: false, weekStartAt, reason: 'unavailable' };
 
   if (await isPromiseRolloverProcessed(session.user.id, weekStartAt)) {
     return { ran: false, created: false, weekStartAt, reason: 'already_processed' };
   }
+
+  // Presence: a completed week that STARTED before this member joined the group
+  // is not a miss. Mid-week joiners are skipped for that week too — they never
+  // had the full week to hit the goal. On an unknown join time we record
+  // nothing and retry on the next open (no flag written), because a false miss
+  // is worse than a late one.
+  const joinedAt = await myMembershipJoinedAt(session.user.id, useDevLocal);
+  if (joinedAt === 'unavailable') return { ran: false, created: false, weekStartAt, reason: 'unavailable' };
+  if (joinedAt === null) return { ran: false, created: false, weekStartAt, reason: 'no_shared_group' };
+  const joinedMs = new Date(joinedAt).getTime();
+  const weekStartMs = range.start.getTime();
+  if (Number.isNaN(joinedMs)) return { ran: false, created: false, weekStartAt, reason: 'unavailable' };
+  if (weekStartMs < joinedMs) return { ran: false, created: false, weekStartAt, reason: 'before_membership' };
 
   const res = await recordMissedPromise(weekStartAt);
   if (res.ok) {
