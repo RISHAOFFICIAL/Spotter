@@ -180,6 +180,77 @@ try:
 except Exception as e:  # node missing / script missing / timeout — never a silent skip
     rec("0-stack-guard", "guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
 
+# ---------------- FLOW 0b: MISSED-PROMISE ROLLOVER GUARD (offline) ----------
+# v1.0 fix (2026-09-23): record_missed_promise had NO production caller, so the
+# pair-private Promises ledger could never fill — the listing's promise and
+# screenshot 09 showed a ledger no real user could reach. The fix wires the RPC
+# into the week-rollover path (fetchWeeklyContext). scripts/smoke/
+# promise-rollover-guard.cjs drives that REAL path (not the RPC directly) and
+# proves: a completed missed week + a note creates exactly ONE Open entry; two
+# more app opens change nothing and do not re-ask; a lost local flag still
+# yields one entry (server idempotency); no note → nothing (never shaming); a
+# met week → nothing and no call; the new entry stays pair-private inside a
+# 3-person group. Same gate as flow 0: missing/shrunken = FAIL, and any FAIL
+# exits non-zero.
+ROLLOVER_GUARD_SCRIPT = os.path.join(REPO_ROOT, "scripts", "smoke", "promise-rollover-guard.cjs")
+ROLLOVER_GUARD_CHECKS = 21  # every PASS/FAIL line it prints; a shrink is itself a failure
+print(f"[guard] node {ROLLOVER_GUARD_SCRIPT} (cwd={REPO_ROOT})", flush=True)
+try:
+    rollover_guard = subprocess.run(["node", ROLLOVER_GUARD_SCRIPT], cwd=REPO_ROOT,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, timeout=300)
+    rollover_parsed = 0
+    for rline in (rollover_guard.stdout or "").splitlines():
+        rm = re.match(r"^(PASS|FAIL)\s+(.*?)(?:\s+::\s+(.*))?$", rline.rstrip())
+        if not rm:
+            continue
+        rollover_parsed += 1
+        rec("0b-promise-rollover", rm.group(2).strip(), rm.group(1), (rm.group(3) or "").strip())
+    if rollover_parsed == 0:
+        rec("0b-promise-rollover", "promise-rollover guard emitted PASS/FAIL lines", FAIL,
+            f"parsed 0 result lines, exit={rollover_guard.returncode}, stderr={short((rollover_guard.stderr or '').strip())}")
+    elif rollover_parsed != ROLLOVER_GUARD_CHECKS:
+        rec("0b-promise-rollover", f"promise-rollover guard reported all {ROLLOVER_GUARD_CHECKS} checks", FAIL,
+            f"parsed {rollover_parsed} result lines (exit={rollover_guard.returncode}) — the guard lost checks")
+except Exception as e:  # node missing / script missing / timeout — never a silent skip
+    rec("0b-promise-rollover", "promise-rollover guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
+# ---------------- FLOW 0c: BOTTOM-BAR GUARD (offline) ----------------
+# Owner-reported (2026-09-23): the bottom bar's Calendar and Menu buttons "don't
+# work". Verified on master: the Calendar slot was a bare <View> with no handler
+# at all, the list slot called the SAME onHome as the Home icon (so tapping it
+# re-rendered the screen the user was on), and HomeScreen passed
+# `onHome={() => {}}`. scripts/smoke/bottom-bar-guard.cjs renders the REAL
+# BottomBar + CameraButton with leaf stubs and proves every visible slot has a
+# callable handler that does something REAL and DISTINCT (Home scrolls the feed,
+# slot 2 pushes /(promises), the camera opens the log sheet, Profile pushes
+# /(profile)); the a11y set is exactly Home/Promises/camera/Profile; the solo
+# spacer draws nothing and cannot be tapped; toggling pairing changes ONLY slot 2;
+# and the 2-left / 2-right split still puts the flex:1 camera at screen centre
+# (deleting the Calendar slot without a spacer moves it +28pt). A negative control
+# runs the same analysis over the OLD bar shape and requires it to FAIL. Same gate
+# as flows 0/0b: missing/shrunken = FAIL, and any FAIL exits non-zero.
+BOTTOM_BAR_GUARD_SCRIPT = os.path.join(REPO_ROOT, "scripts", "smoke", "bottom-bar-guard.cjs")
+BOTTOM_BAR_GUARD_CHECKS = 33  # every PASS/FAIL line it prints; a shrink is itself a failure
+print(f"[guard] node {BOTTOM_BAR_GUARD_SCRIPT} (cwd={REPO_ROOT})", flush=True)
+try:
+    bar_guard = subprocess.run(["node", BOTTOM_BAR_GUARD_SCRIPT], cwd=REPO_ROOT,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, timeout=300)
+    bar_parsed = 0
+    for bline in (bar_guard.stdout or "").splitlines():
+        bm = re.match(r"^(PASS|FAIL)\s+(.*?)(?:\s+::\s+(.*))?$", bline.rstrip())
+        if not bm:
+            continue
+        bar_parsed += 1
+        rec("0c-bottom-bar", bm.group(2).strip(), bm.group(1), (bm.group(3) or "").strip())
+    if bar_parsed == 0:
+        rec("0c-bottom-bar", "bottom-bar guard emitted PASS/FAIL lines", FAIL,
+            f"parsed 0 result lines, exit={bar_guard.returncode}, stderr={short((bar_guard.stderr or '').strip())}")
+    elif bar_parsed != BOTTOM_BAR_GUARD_CHECKS:
+        rec("0c-bottom-bar", f"bottom-bar guard reported all {BOTTOM_BAR_GUARD_CHECKS} checks", FAIL,
+            f"parsed {bar_parsed} result lines (exit={bar_guard.returncode}) — the guard lost checks")
+except Exception as e:  # node missing / script missing / timeout — never a silent skip
+    rec("0c-bottom-bar", "bottom-bar guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
 # ---------------- FLOW 1: SIGNUP + SIGNIN ----------------
 users = {}
 for k in "abc":

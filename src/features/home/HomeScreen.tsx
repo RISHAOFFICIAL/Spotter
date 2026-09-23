@@ -75,6 +75,9 @@ export default function HomeScreen() {
   const [notifSheetOpen, setNotifSheetOpen] = useState(false);
   const notifAsked = useRef(false);
   const foregroundLoadDone = useRef(false);
+  // The bar's Home slot scrolls this feed to the top (iOS convention). Without
+  // a ref the slot could only be a no-op, which is how it shipped dead.
+  const scrollRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
 
   // In-app welcome toast after a fresh accept (invite-flow.md §5: one-time,
   // above the bottom bar — push notifications are out of MVP scope).
@@ -243,6 +246,7 @@ export default function HomeScreen() {
   return (
     <View style={[styles.screen, { paddingBottom: 0 }]}>
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={[styles.scroll, { paddingTop: insets.top + spacing.sm }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); void load(false); }} tintColor={colors.text.muted.hex} />
@@ -251,11 +255,13 @@ export default function HomeScreen() {
         {/* Header row */}
         <View style={styles.headerRow}>
           <Text style={[textStyles.title.style, styles.wordmark]}>SPOTTER</Text>
+          {/* Status chip, NOT a control: week start is fixed at onboarding, so
+              there is nothing to open — the old chevron-down made it read as a
+              dropdown that did nothing. The uploaded art draws text only. */}
           <View style={styles.weekStartPill}>
             <Text style={[textStyles.label.style, { color: colors.text.muted.hex }]}>
               WK START: {ctx?.weekStartDay ?? 'MON'}
             </Text>
-            <Ionicons name="chevron-down" size={14} color={colors.text.muted.hex} />
           </View>
         </View>
 
@@ -406,8 +412,14 @@ export default function HomeScreen() {
         )}
       </ScrollView>
 
-      {/* Bottom bar — pinned; camera is the fixed primary action. Home is already the active screen, so the Home slot is a no-op. */}
-      <BottomBar onHome={() => {}} onCamera={() => setLogOpen(true)} weekCount={weekCount} />
+      {/* Bottom bar — pinned; camera is the fixed primary action. Home scrolls
+          this feed to the top, slot 2 opens the ledger (only when paired). */}
+      <BottomBar
+        onHome={() => scrollRef.current?.scrollTo({ y: 0, animated: true })}
+        onCamera={() => setLogOpen(true)}
+        inGroup={inGroup}
+        weekCount={weekCount}
+      />
 
       <LogSheet visible={logOpen} onClose={() => setLogOpen(false)} onLogged={handleLogged} partnerName={memberNames[0]} />
       <InviteSheet visible={inviteOpen} onClose={() => setInviteOpen(false)} />

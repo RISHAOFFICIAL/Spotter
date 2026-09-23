@@ -20,6 +20,7 @@ import { devMock, type WorkoutRow, type DevMembership, DEV_PAIR_GROUP_ID } from 
 import { getPetNames } from './naming';
 import { track } from './analytics';
 import { maybeFinalizePreviousWeek, previousWeekRange, countInRange } from './weeklyResults';
+import { maybeRecordMissedPromise } from './promiseRollover';
 import { getPetName } from './naming';
 import { getMissPromise, getPartnerMissPromise } from './missPromise';
 import { getRecapForLastCompletedWeek, isRecapDismissed } from './weekRecap';
@@ -340,6 +341,11 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
     // never fails the context fetch). Dev scope = the resolved group (the
     // pair group for a pair; the demo group for seeded 3-person demos).
     await maybeFinalizePreviousWeek(new Date(), weekStartDay, weeklyGoal, shared?.group_id ?? DEV_PAIR_GROUP_ID);
+    // v1.0 fix (missed-goal rollover): the completed week becomes an Open
+    // Promises-ledger entry when the maker missed it and a promise is set.
+    // Runs AFTER the finalize above (the snapshot is the authoritative miss
+    // source) and is idempotent once per user+week per device.
+    await maybeRecordMissedPromise(new Date(), weekStartDay, weeklyGoal);
 
     const rows = await devMock.listWorkouts(session.user.id);
     const memberRows: WorkoutRow[] = [];
@@ -520,6 +526,9 @@ export async function fetchWeeklyContext(): Promise<WeeklyContextResult> {
   // never fails the context fetch). Real scope = the current group id
   // (group-scoped weekly_results rows, consistent with real snapshots).
   await maybeFinalizePreviousWeek(new Date(), weekStartDay, weeklyGoal, group.group_id);
+  // v1.0 fix (missed-goal rollover) — REAL mode: same call as the dev branch
+  // above, after the finalize so the snapshot decides the miss.
+  await maybeRecordMissedPromise(new Date(), weekStartDay, weeklyGoal);
   const ownWeek = (rows ?? []).filter((r) => r.user_id === session.user.id && inWeek(r));
   return {
     ok: true,
