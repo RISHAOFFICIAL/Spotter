@@ -3,10 +3,17 @@
  * slice 1). Shown ONLY after the user has paired AND completed their first
  * return visit to Home (HomeScreen owns the trigger). NEVER at first open.
  *
- * The sheet says exactly what notifications do TODAY: "Know when
- * {partnerFirstName} logs, and when your invite is accepted — nothing else."
- * No invented variants; missed_week stays off by default (it's a Profile
- * toggle, not promised here).
+ * The sheet says exactly what notifications do TODAY — the two OWN-DEVICE
+ * types, and nothing else: the invite still-waiting nudge and the missed-week
+ * alert (which stays off by default; it is a Profile toggle, not promised
+ * here). It makes NO claim that a partner's workout or an accepted invite
+ * reaches the phone: those two types are cross-user, and resolveRealTarget
+ * (pushDispatch.ts) returns a null token for any recipient other than the
+ * current user — own-row RLS on push_devices — so they suppress as
+ * 'no_device' and never send in a real build. Verified 2026-09-23; evidence in
+ * /home/team/shared/push-reachability-verified-2026-09-23.md. The sheet's
+ * copy is gated by scripts/smoke/push-copy-guard.cjs — if push reachability
+ * changes, the claim may be widened deliberately, in a reviewed diff.
  *
  *   "Enable notifications" → markNotificationExplained() then the REAL OS
  *     prompt (requestNotificationPermission). Dev mode grants the mock.
@@ -68,7 +75,7 @@ export function NotificationsSheet({
           Pair accountability, on your phone
         </Text>
         <Text style={[textStyles.caption.style, styles.body]}>
-          Know when {partnerFirstName ?? 'your partner'} logs, and when your invite is accepted — nothing else. You stay in control of every type in Profile later.
+          A nudge if an invite you sent is still waiting, and a missed-week alert you can switch on — that’s everything we send today. {partnerFirstName ?? 'Your partner'}’s workouts show up in your feed, and you control every type in Profile later.
         </Text>
         <Pressable accessibilityRole="button" accessibilityLabel="Enable notifications" onPress={() => void enable()} style={({ pressed }) => [styles.primary, pressed && { opacity: 0.9 }]}>
           <Text style={[textStyles.bodyStrong.style, { color: colors.text.onVolt.hex }]}>Enable notifications</Text>

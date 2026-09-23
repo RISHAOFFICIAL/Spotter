@@ -251,6 +251,37 @@ try:
             f"parsed {bar_parsed} result lines (exit={bar_guard.returncode}) — the guard lost checks")
 except Exception as e:  # node missing / script missing / timeout — never a silent skip
     rec("0c-bottom-bar", "bottom-bar guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
+# ---------------- FLOW 0e: PUSH-COPY GUARD (offline) ----------------
+# The app promised "Know when {partner} logs, and when your invite is accepted"
+# and a "Partner logged — when your partner logs a workout" toggle caption. Both
+# are CROSS-USER push types and neither can deliver: resolveRealTarget returns
+# expoPushToken: null for any non-self recipient (own-row RLS on push_devices),
+# which suppresses as 'no_device'. scripts/smoke/push-copy-guard.cjs renders the
+# REAL NotificationsSheet, reads the compiled NOTIFICATION_META, sweeps src/ for
+# the retired phrasings and negative-controls the same analyser against them.
+# Same gate as flows 0/0b/0c: missing/shrunken = FAIL, and any FAIL exits non-zero.
+PUSH_COPY_GUARD_SCRIPT = os.path.join(REPO_ROOT, "scripts", "smoke", "push-copy-guard.cjs")
+PUSH_COPY_GUARD_CHECKS = 19  # every PASS/FAIL line it prints (18 checks + 1 self-check); a shrink is itself a failure
+print(f"[guard] node {PUSH_COPY_GUARD_SCRIPT} (cwd={REPO_ROOT})", flush=True)
+try:
+    copy_guard = subprocess.run(["node", PUSH_COPY_GUARD_SCRIPT], cwd=REPO_ROOT,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, timeout=300)
+    copy_parsed = 0
+    for cline in (copy_guard.stdout or "").splitlines():
+        cm = re.match(r"^(PASS|FAIL)\s+(.*?)(?:\s+::\s+(.*))?$", cline.rstrip())
+        if not cm:
+            continue
+        copy_parsed += 1
+        rec("0e-push-copy", cm.group(2).strip(), cm.group(1), (cm.group(3) or "").strip())
+    if copy_parsed == 0:
+        rec("0e-push-copy", "push-copy guard emitted PASS/FAIL lines", FAIL,
+            f"parsed 0 result lines, exit={copy_guard.returncode}, stderr={short((copy_guard.stderr or '').strip())}")
+    elif copy_parsed != PUSH_COPY_GUARD_CHECKS:
+        rec("0e-push-copy", f"push-copy guard reported all {PUSH_COPY_GUARD_CHECKS} checks", FAIL,
+            f"parsed {copy_parsed} result lines (exit={copy_guard.returncode}) — the guard lost checks")
+except Exception as e:  # node missing / script missing / timeout — never a silent skip
+    rec("0e-push-copy", "push-copy guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
 # ---------------- FLOW 1: SIGNUP + SIGNIN ----------------
 users = {}
 for k in "abc":
