@@ -180,6 +180,40 @@ try:
 except Exception as e:  # node missing / script missing / timeout — never a silent skip
     rec("0-stack-guard", "guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
 
+# ---------------- FLOW 0b: MISSED-PROMISE ROLLOVER GUARD (offline) ----------
+# v1.0 fix (2026-09-23): record_missed_promise had NO production caller, so the
+# pair-private Promises ledger could never fill — the listing's promise and
+# screenshot 09 showed a ledger no real user could reach. The fix wires the RPC
+# into the week-rollover path (fetchWeeklyContext). scripts/smoke/
+# promise-rollover-guard.cjs drives that REAL path (not the RPC directly) and
+# proves: a completed missed week + a note creates exactly ONE Open entry; two
+# more app opens change nothing and do not re-ask; a lost local flag still
+# yields one entry (server idempotency); no note → nothing (never shaming); a
+# met week → nothing and no call; the new entry stays pair-private inside a
+# 3-person group. Same gate as flow 0: missing/shrunken = FAIL, and any FAIL
+# exits non-zero.
+ROLLOVER_GUARD_SCRIPT = os.path.join(REPO_ROOT, "scripts", "smoke", "promise-rollover-guard.cjs")
+ROLLOVER_GUARD_CHECKS = 20  # every PASS/FAIL line it prints; a shrink is itself a failure
+print(f"[guard] node {ROLLOVER_GUARD_SCRIPT} (cwd={REPO_ROOT})", flush=True)
+try:
+    rollover_guard = subprocess.run(["node", ROLLOVER_GUARD_SCRIPT], cwd=REPO_ROOT,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, timeout=300)
+    rollover_parsed = 0
+    for rline in (rollover_guard.stdout or "").splitlines():
+        rm = re.match(r"^(PASS|FAIL)\s+(.*?)(?:\s+::\s+(.*))?$", rline.rstrip())
+        if not rm:
+            continue
+        rollover_parsed += 1
+        rec("0b-promise-rollover", rm.group(2).strip(), rm.group(1), (rm.group(3) or "").strip())
+    if rollover_parsed == 0:
+        rec("0b-promise-rollover", "promise-rollover guard emitted PASS/FAIL lines", FAIL,
+            f"parsed 0 result lines, exit={rollover_guard.returncode}, stderr={short((rollover_guard.stderr or '').strip())}")
+    elif rollover_parsed != ROLLOVER_GUARD_CHECKS:
+        rec("0b-promise-rollover", f"promise-rollover guard reported all {ROLLOVER_GUARD_CHECKS} checks", FAIL,
+            f"parsed {rollover_parsed} result lines (exit={rollover_guard.returncode}) — the guard lost checks")
+except Exception as e:  # node missing / script missing / timeout — never a silent skip
+    rec("0b-promise-rollover", "promise-rollover guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
 # ---------------- FLOW 1: SIGNUP + SIGNIN ----------------
 users = {}
 for k in "abc":
