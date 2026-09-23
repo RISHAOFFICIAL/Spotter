@@ -180,6 +180,44 @@ try:
 except Exception as e:  # node missing / script missing / timeout — never a silent skip
     rec("0-stack-guard", "guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
 
+# ---------------- FLOW 0b/0c: LOOK ENGINE (offline, no device) ----------------
+# Same rule as flow 0: these scripts print their own PASS/FAIL lines and a
+# shrink IS a failure. They live next to flow 0 because a network flow can
+# sys.exit(1) early, and the look engine is exactly the code the owner's camera
+# taps into — it must be exercised on every run, not only when someone
+# remembers to.
+#
+#   0b  scripts/looks/bake-harness.mjs       the real applySelfieGrade over a
+#                                            64x64 synthetic JPEG for all 8 looks
+#   0c  scripts/looks/check-look-previews.mjs the derived live-preview table vs
+#                                            the real grade (tone by tone) + teeth
+LOOKS_DIR = os.path.join(REPO_ROOT, "scripts", "looks")
+LOOK_SCRIPTS = [
+    ("0b-look-bake", os.path.join(LOOKS_DIR, "bake-harness.mjs"), 38),
+    ("0c-look-preview", os.path.join(LOOKS_DIR, "check-look-previews.mjs"), 37),
+]
+for flow, script, expected in LOOK_SCRIPTS:
+    print(f"[guard] node {script} (cwd={REPO_ROOT})", flush=True)
+    try:
+        proc = subprocess.run(["node", script], cwd=REPO_ROOT,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True, timeout=300)
+        parsed = 0
+        for line in (proc.stdout or "").splitlines():
+            m = re.match(r"^(PASS|FAIL)\s+(.*?)(?:\s+::\s+(.*))?$", line.rstrip())
+            if not m:
+                continue
+            parsed += 1
+            rec(flow, m.group(2).strip(), m.group(1), (m.group(3) or "").strip())
+        if parsed == 0:
+            rec(flow, "harness emitted PASS/FAIL lines", FAIL,
+                f"parsed 0 result lines, exit={proc.returncode}, stderr={short((proc.stderr or '').strip())}")
+        elif parsed != expected:
+            rec(flow, f"harness reported all {expected} checks", FAIL,
+                f"parsed {parsed} result lines (exit={proc.returncode}) — the harness lost checks")
+    except Exception as e:  # node missing / script missing / timeout — never a silent skip
+        rec(flow, "harness ran to completion", FAIL, f"{type(e).__name__}: {e}")
+
 # ---------------- FLOW 1: SIGNUP + SIGNIN ----------------
 users = {}
 for k in "abc":
