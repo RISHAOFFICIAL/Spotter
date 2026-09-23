@@ -237,7 +237,6 @@ function styleOf(el) {
   }
   return merged;
 }
-const GRAPHIC_TYPES = new Set(['Ionicons', 'Text']);
 
 /** The analysis the guard ships on. Returns, for one slot: what it draws, what
  * it can be tapped by, and what tapping it actually does. */
