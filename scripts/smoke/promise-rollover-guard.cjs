@@ -28,6 +28,11 @@
  *  7. Nothing in the ledger path widened RLS: `promise_entries` still carries
  *     exactly its one pair-column SELECT policy and no write policy, and the
  *     new client module reaches the table only through the RPC.
+ *  8. A completed week that STARTED BEFORE the member joined their group (or
+ *     began mid-week for them) records NOTHING — no false miss, no RPC call.
+ *     The membership start is the signal, so the earlier scenarios explicitly
+ *     backdate their memberships: they model members who were present for the
+ *     WHOLE completed week (the dev store stamps new joins at real-now).
  *
  * NOT covered here (stated so no one reads more into a green run): real-mode
  * (Supabase) execution, push delivery, and the on-device UI. The dev mock
@@ -148,6 +153,31 @@ const elapsedWeekStart = (weeksAgo = 0, at = new Date()) => {
 /** A clock instant INSIDE the week that follows `week` — i.e. the moment at
  * which `week` is the most recent fully-elapsed one. */
 const clockAfter = (week, offsetMs = 6 * 3600_000) => new Date(week.getTime() + 7 * 24 * 3600_000 + offsetMs);
+/** "This member joined their group N weeks ago" (dev memberships are stamped at
+ * real-now by the pair / demo seeding). */
+const joinedWeeksAgo = (weeks) => Date.now() - weeks * 7 * 24 * 3600_000;
+/** Stamp every membership row of the user's CURRENT shared dev group with a
+ * join time, oldest member first (the dev mirror of memberships.created_at).
+ * Scenarios that claim "a member missed a completed week" need their members to
+ * have joined BEFORE that week — otherwise they are modelling a brand-new
+ * joiner, which is precisely case 8 below. */
+async function stampSharedGroupJoinedAt(userId, baseMs) {
+  const shared = await devMock.findSharedDevGroup(userId);
+  if (!shared) throw new Error(`no shared dev group for ${userId}`);
+  let t = baseMs;
+  for (const m of shared.members) {
+    await devMock.addDevMembership({ ...m, created_at: new Date(t).toISOString() });
+    t += 60_000; // keep a defined join order
+  }
+}
+/** Re-stamp one user's own membership row in a group (the guard's stand-in for
+ * "this is when I joined"). */
+async function stampMyMembership(userId, groupId, iso) {
+  const rows = await devMock.getDevMemberships(userId);
+  const mine = rows.find((m) => m.group_id === groupId);
+  if (!mine) throw new Error(`no membership row for ${userId} in ${groupId}`);
+  await devMock.addDevMembership({ ...mine, created_at: iso });
+}
 const workRow = (userId, loggedAtIso) => ({
   id: `row-${Math.random().toString(36).slice(2, 10)}`,
   user_id: userId,
@@ -188,6 +218,11 @@ async function pairWith(makerEmail, partnerEmail) {
   if (!acc || !acc.ok) throw new Error(`acceptInvite failed: ${acc && acc.error}`);
   await authenticate(makerEmail, 'pass1234'); // back to the maker
   const makerId = (await getStoredSession()).user.id;
+  // Both halves are meant to be a pair that has been TOGETHER for weeks: every
+  // scenario below judges an already-completed week ("I missed last week"). The
+  // dev store stamps a brand-new membership at real-now, which is a joiner who
+  // was NOT present for that week — so backdate what is being modelled.
+  await stampSharedGroupJoinedAt(makerId, joinedWeeksAgo(6));
   return { makerId, witnessId };
 }
 
@@ -357,6 +392,10 @@ const run = async () => {
     const memberships = await devMock.getDevMemberships(crewId);
     const inDemo = memberships.filter((m) => m.group_id === DEV_DEMO_GROUP_ID);
     if (inDemo.length !== 1) throw new Error(`demo group not seeded (${memberships.length} memberships)`);
+    // The seeded crew joined "hours ago" — i.e. AFTER the completed week this
+    // scenario judges. Same shape as above: model a group that has been
+    // together for weeks before asking about a completed week.
+    await stampSharedGroupJoinedAt(crewId, joinedWeeksAgo(6));
     const setNote = await setMissNote('a cold brew', MAYA_ID); // explicit witness pick (3+ group)
     if (!setNote.ok) throw new Error(`setMissNote failed: ${setNote.error}`);
 
@@ -387,6 +426,45 @@ const run = async () => {
     );
   } catch (error) {
     check('S4: pair-private inside a 3-person group (scenario ran to completion)', false, `${error.message}`);
+  }
+
+  // ------------------------------------------------------------------------
+  // SCENARIO 6 — a completed week that STARTED BEFORE the member joined the
+  // group is NOT a miss: nothing may be recorded (the false-miss defect).
+  // This is the case that fails on the unfixed rollover, which asked only
+  // "snapshot, else my logs < goal" and never looked at the membership start.
+  // ------------------------------------------------------------------------
+  try {
+    if (!A_ID) throw new Error('S1 did not run — the pair state is missing');
+    await authenticate(A_EMAIL, 'pass1234');
+    const note = await setMissNote('a coffee', null); // note IS set: the join date is the only reason
+    if (!note.ok) throw new Error(`setMissNote failed: ${note.error}`);
+
+    const shared = await devMock.findSharedDevGroup(A_ID);
+    if (!shared) throw new Error('the maker has no shared dev group');
+
+    // A week no other scenario touches (4 back), and a membership that began
+    // MID-week inside it — the brief's case: a brand-new joiner, who never had
+    // the full week to hit the goal.
+    const joinedWeek = elapsedWeekStart(4, nowUtc());
+    const joinedIso = joinedWeek.toISOString();
+    const midWeekJoin = new Date(joinedWeek.getTime() + 3 * 24 * 3600_000).toISOString();
+    await stampMyMembership(A_ID, shared.group_id, midWeekJoin);
+
+    const callsBefore = rpcCount();
+    const outcome = await rollover.recordMissedPromiseForCompletedWeek(clockAfter(joinedWeek), MON, GOAL);
+    const rowsNow = await devMock.listLedgerFor(A_ID);
+    check(
+      'S6: a completed week that began BEFORE the member joined records NOTHING (no false miss, no RPC call)',
+      outcome.ran === false &&
+        outcome.reason === 'before_membership' &&
+        outcome.weekStartAt === joinedIso &&
+        rpcCount() === callsBefore &&
+        rowsNow.every((r) => r.week_start !== joinedIso),
+      `${JSON.stringify(outcome)} rpcCalls=${rpcCount() - callsBefore} rows=${rowsNow.length}`,
+    );
+  } catch (error) {
+    check('S6: a pre-membership completed week records nothing (scenario ran to completion)', false, `${error.message}`);
   }
 
   // ------------------------------------------------------------------------

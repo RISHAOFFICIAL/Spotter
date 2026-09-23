@@ -193,7 +193,7 @@ except Exception as e:  # node missing / script missing / timeout — never a si
 # 3-person group. Same gate as flow 0: missing/shrunken = FAIL, and any FAIL
 # exits non-zero.
 ROLLOVER_GUARD_SCRIPT = os.path.join(REPO_ROOT, "scripts", "smoke", "promise-rollover-guard.cjs")
-ROLLOVER_GUARD_CHECKS = 20  # every PASS/FAIL line it prints; a shrink is itself a failure
+ROLLOVER_GUARD_CHECKS = 21  # every PASS/FAIL line it prints; a shrink is itself a failure
 print(f"[guard] node {ROLLOVER_GUARD_SCRIPT} (cwd={REPO_ROOT})", flush=True)
 try:
     rollover_guard = subprocess.run(["node", ROLLOVER_GUARD_SCRIPT], cwd=REPO_ROOT,
