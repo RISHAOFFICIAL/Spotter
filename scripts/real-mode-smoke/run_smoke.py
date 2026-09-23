@@ -251,6 +251,42 @@ try:
             f"parsed {bar_parsed} result lines (exit={bar_guard.returncode}) — the guard lost checks")
 except Exception as e:  # node missing / script missing / timeout — never a silent skip
     rec("0c-bottom-bar", "bottom-bar guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
+# Owner-facing launch blocker (F1, 2026-09-23): a BRAND-NEW account could not
+# finish onboarding on the live project at all. `commitOnboarding` wrote the
+# user's own Personal group before the `public.users` row that group references
+# (groups.creator_id -> public.users, and nothing mirrors auth.users ->
+# public.users), so the insert failed with groups_creator_id_fkey for every new
+# signup — a likely App Review rejection, caught only because a live probe
+# existed. THIS suite never saw it because its own onboarding() writes
+# users -> groups -> memberships by hand, i.e. it re-implements the app's order
+# (a Python re-implementation can never gate the app's order — that is the whole
+# lesson). scripts/smoke/onboarding-order-guard.cjs closes it the right way: it
+# runs the REAL compiled commitOnboarding against a fake client that enforces
+# the live foreign keys, so the write order is asserted BEHAVIOURALLY, and it
+# carries its own negative control (the pre-fix order must still be rejected).
+# Same gate as flows 0/0b/0c: missing/shrunken = FAIL, any FAIL exits non-zero.
+ONBOARDING_GUARD_SCRIPT = os.path.join(REPO_ROOT, "scripts", "smoke", "onboarding-order-guard.cjs")
+ONBOARDING_GUARD_CHECKS = 15  # every PASS/FAIL line it prints; a shrink is itself a failure
+print(f"[guard] node {ONBOARDING_GUARD_SCRIPT} (cwd={REPO_ROOT})", flush=True)
+try:
+    onb_guard = subprocess.run(["node", ONBOARDING_GUARD_SCRIPT], cwd=REPO_ROOT,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, timeout=300)
+    onb_parsed = 0
+    for oline in (onb_guard.stdout or "").splitlines():
+        om = re.match(r"^(PASS|FAIL)\s+(.*?)(?:\s+::\s+(.*))?$", oline.rstrip())
+        if not om:
+            continue
+        onb_parsed += 1
+        rec("0d-onboarding-order", om.group(2).strip(), om.group(1), (om.group(3) or "").strip())
+    if onb_parsed == 0:
+        rec("0d-onboarding-order", "onboarding-order guard emitted PASS/FAIL lines", FAIL,
+            f"parsed 0 result lines, exit={onb_guard.returncode}, stderr={short((onb_guard.stderr or '').strip())}")
+    elif onb_parsed != ONBOARDING_GUARD_CHECKS:
+        rec("0d-onboarding-order", f"onboarding-order guard reported all {ONBOARDING_GUARD_CHECKS} checks", FAIL,
+            f"parsed {onb_parsed} result lines (exit={onb_guard.returncode}) — the guard lost checks")
+except Exception as e:  # node missing / script missing / timeout — never a silent skip
+    rec("0d-onboarding-order", "onboarding-order guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
 # ---------------- FLOW 1: SIGNUP + SIGNIN ----------------
 users = {}
 for k in "abc":
