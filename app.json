@@ -14,7 +14,7 @@
       "buildNumber": "17",
       "infoPlist": {
         "NSCameraUsageDescription": "SPOTTER uses your camera to capture photo proof of your workouts — a live selfie and a shot of your surroundings. Photos are sealed to your account — only you and your group can ever see them.",
-        "NSUserNotificationsUsageDescription": "SPOTTER lets you know when your partner logs a workout and when your invite is accepted. You control every notification type.",
+        "NSUserNotificationsUsageDescription": "SPOTTER sends a nudge if an invite you sent is still waiting, and a missed-week alert you can switch on. You control every notification type.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
