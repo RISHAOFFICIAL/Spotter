@@ -55,6 +55,13 @@ export const LEDGER_EMPTY2_BODY =
   'Every promise is settled. Miss a week and a new one lands here — just for you and the person it\u2019s to.';
 export const LEDGER_EMPTY1_BODY_NO_NOTE =
   'Set one in Profile — just for you and someone you choose.';
+// v1.0 fix (2026-09-23): the ledger's read failure is NAMED, never disguised as
+// an empty ledger. The screen imports these instead of spelling copy inline so
+// there is one source for the words (and the smoke checks can read them).
+export const LEDGER_LOAD_ERROR_TITLE = "Couldn't load your promises.";
+export const LEDGER_LOAD_ERROR_BODY =
+  'Nothing is lost. Try again — if it keeps failing the list could not be read.';
+export const LEDGER_RETRY_LABEL = 'Try again';
 // §4 Profile row.
 export const PROFILE_PROMISES_CAPTION =
   'Promises between you and the person you made them to — open, kept, or let go.';
@@ -150,37 +157,61 @@ export async function resolvePromise(
  * newest week first, no pagination. Names from the member map, "A member"
  * fallback, never crashes. */
 export async function fetchLedger(): Promise<LedgerEntry[]> {
+  const read = await readLedger();
+  return read.ok ? read.entries : [];
+}
+
+/** The ledger read WITH its outcome, and with the member map it resolved names
+ * from (so the screen can name a witness who has no ledger row yet).
+ *
+ * `fetchLedger`'s `[]`-on-failure is silent by construction: a failed read —
+ * network, PostgREST error, a misapplied policy — rendered exactly like a
+ * genuinely empty ledger, and the owner's acceptance test ("a missed week shows
+ * an entry") would have read a broken read as a broken fix. The screen uses
+ * this instead so a failure can be NAMED and retried. */
+export async function readLedger(): Promise<
+  { ok: true; entries: LedgerEntry[]; names: Map<string, string> } | { ok: false; error: string }
+> {
   const session = await getStoredSession();
-  if (!session) return [];
+  if (!session) return { ok: false, error: 'Sign in first.' };
 
   const names = await buildNameMap();
   const resolveName = (id: string): string => names.get(id)?.trim() || NAME_FALLBACK;
 
   let rows: DevPromiseEntry[];
   if (session.isDevMode || !supabase) {
-    rows = await devMock.listLedgerFor(session.user.id);
+    try {
+      rows = await devMock.listLedgerFor(session.user.id);
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : "Couldn't read your promises." };
+    }
   } else {
     const { data, error } = await supabase
       .from('promise_entries')
       .select('id, user_id, witness_id, promise_text, week_start, state, created_at, updated_at')
       .or(`user_id.eq.${session.user.id},witness_id.eq.${session.user.id}`)
       .order('week_start', { ascending: false });
-    if (error || !data) return [];
+    if (error) return { ok: false, error: error.message };
+    if (!data) return { ok: false, error: "Couldn't read your promises." };
     rows = data as unknown as DevPromiseEntry[];
   }
 
-  return rows.map((r) => ({
-    id: r.id,
-    makerId: r.user_id,
-    witnessId: r.witness_id,
-    promiseText: r.promise_text,
-    weekStart: r.week_start,
-    state: r.state,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-    makerName: resolveName(r.user_id),
-    witnessName: resolveName(r.witness_id),
-  }));
+  return {
+    ok: true,
+    names,
+    entries: rows.map((r) => ({
+      id: r.id,
+      makerId: r.user_id,
+      witnessId: r.witness_id,
+      promiseText: r.promise_text,
+      weekStart: r.week_start,
+      state: r.state,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      makerName: resolveName(r.user_id),
+      witnessName: resolveName(r.witness_id),
+    })),
+  };
 }
 
 /** Profile-row badge: count of OPEN entries where I am maker OR witness

@@ -5,9 +5,11 @@
  *
  * THE locked rule rendered here: every entry is visible ONLY to the
  * promise-maker and their ONE snapshotted witness — never the whole group, at
- * any group size. The screen fetches through fetchLedger() (pair-scoped by
+ * any group size. The screen fetches through readLedger() (pair-scoped by
  * RLS in real mode / by the same filter in the dev mock), so entries between
- * two OTHER members of the caller's group are simply absent in-frame.
+ * two OTHER members of the caller's group are simply absent in-frame. A read
+ * that FAILS is named on screen with a retry (2026-09-23) — it must never be
+ * mistaken for a genuinely empty ledger.
  *
  * Views:
  *   - maker view:  "I owe you: {text}."  + state chip + one-tap settle
@@ -26,7 +28,7 @@ import { AppButton } from '@/components/AppButton';
 import { getMissPromise, getMissWitnessId } from '@/lib/missPromise';
 import { getStoredSession } from '@/lib/supabase';
 import {
-  fetchLedger,
+  readLedger,
   resolvePromise,
   type LedgerEntry,
   PROMISES_SCREEN_TITLE,
@@ -38,6 +40,9 @@ import {
   LEDGER_EMPTY1_BODY_NO_NOTE,
   LEDGER_EMPTY2_TITLE,
   LEDGER_EMPTY2_BODY,
+  LEDGER_LOAD_ERROR_TITLE,
+  LEDGER_LOAD_ERROR_BODY,
+  LEDGER_RETRY_LABEL,
 } from '@/lib/promises';
 import { colors, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
@@ -118,19 +123,32 @@ export function PromisesScreen() {
   const [myId, setMyId] = useState<string | null>(null);
   const [settling, setSettling] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // v1.0 fix (2026-09-23): a failed READ is its own, visible state. It used to
+  // be invisible — the read returned [] and the screen drew "No promises yet.",
+  // so a broken live read was indistinguishable from a genuinely empty ledger.
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const session = await getStoredSession();
     setMyId(session?.user.id ?? null);
-    const [rows, note, witnessId] = await Promise.all([fetchLedger(), getMissPromise(), getMissWitnessId()]);
-    setEntries(rows);
+    const [read, note, witnessId] = await Promise.all([readLedger(), getMissPromise(), getMissWitnessId()]);
+    if (read.ok) {
+      setEntries(read.entries);
+      setLoadError(null);
+    } else {
+      // Keep whatever was already on screen; the empty-state slot below (or the
+      // footer, when rows exist) names the failure and offers a retry.
+      setLoadError(read.error);
+    }
     setNoteSet(!!note);
-    // Witness first name for the empty-state-1 line: the note's witness; when
-    // the note is set that id is always resolvable from the ledger rows' names
-    // (or the fallback).
+    // Witness first name for the empty-state-1 line: the note's witness. Resolve
+    // it from the ledger row when one exists, else from the SAME member map the
+    // read already built — an empty ledger (note set, nothing missed yet, the
+    // state the owner is most likely to see) must not degrade to "A member".
     if (witnessId) {
-      const row = rows.find((r) => r.witnessId === witnessId);
-      setWitnessName(row?.witnessName ?? null);
+      const row = read.ok ? read.entries.find((r) => r.witnessId === witnessId) : undefined;
+      const fromMap = read.ok ? read.names.get(witnessId) : undefined;
+      setWitnessName(row?.witnessName ?? fromMap?.trim() ?? null);
     } else {
       setWitnessName(null);
     }
@@ -156,7 +174,9 @@ export function PromisesScreen() {
 
   const rows = entries ?? [];
   const allSettled = rows.length > 0 && rows.every((r) => r.state !== 'open');
-  const hasBeenMissed = rows.length > 0;
+  // One failure line, shown wherever there is room for it: in the empty slot
+  // when nothing rendered, otherwise in the footer under the rows.
+  const failureLine = error ?? (rows.length > 0 ? loadError : null);
 
   const emptyTitle = allSettled ? LEDGER_EMPTY2_TITLE : LEDGER_EMPTY1_TITLE;
   const emptyBody = allSettled
@@ -199,19 +219,30 @@ export function PromisesScreen() {
           />
         )}
         ListEmptyComponent={
-          <View style={styles.emptyBlock}>
-            <Text style={[textStyles.headline.style, { color: colors.text.primary.hex }]}>{emptyTitle}</Text>
-            <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex, textAlign: 'center' }]}>
-              {emptyBody}
-            </Text>
-          </View>
+          loadError ? (
+            <View style={styles.emptyBlock}>
+              <Text style={[textStyles.headline.style, { color: colors.text.primary.hex }]}>
+                {LEDGER_LOAD_ERROR_TITLE}
+              </Text>
+              <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex, textAlign: 'center' }]}>
+                {LEDGER_LOAD_ERROR_BODY}
+              </Text>
+              <Text style={[textStyles.caption.style, styles.errorDetail]}>{loadError}</Text>
+              <AppButton label={LEDGER_RETRY_LABEL} onPress={() => void load()} style={styles.retryBtn} />
+            </View>
+          ) : (
+            <View style={styles.emptyBlock}>
+              <Text style={[textStyles.headline.style, { color: colors.text.primary.hex }]}>{emptyTitle}</Text>
+              <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex, textAlign: 'center' }]}>
+                {emptyBody}
+              </Text>
+            </View>
+          )
         }
         ListFooterComponent={
           <>
-            {error && (
-              <Text style={[textStyles.caption.style, { color: colors.text.danger.hex, textAlign: 'center', marginTop: spacing.lg }]}>
-                {error}
-              </Text>
+            {failureLine && (
+              <Text style={[textStyles.caption.style, styles.errorLine]}>{failureLine}</Text>
             )}
             <Text style={[textStyles.caption.style, { color: colors.text.muted.hex, textAlign: 'center', marginTop: spacing.xxl }]}>
               {LEDGER_FRAMING_LINE}
@@ -248,5 +279,10 @@ const styles = StyleSheet.create({
   chipOpen: { backgroundColor: colors.brand.primary.hex },
   chipDone: { backgroundColor: colors.background.overlay.hex, borderWidth: 1, borderColor: 'rgba(0,0,0,0.12)' },
   settleRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
+  // A failed READ (distinct from a failed settle above): the words say what
+  // happened, the raw reason sits under them, and the retry re-runs load().
+  errorLine: { color: colors.text.danger.hex, textAlign: 'center', marginTop: spacing.lg },
+  errorDetail: { color: colors.text.muted.hex, textAlign: 'center' },
+  retryBtn: { alignSelf: 'stretch', marginTop: spacing.sm },
   emptyBlock: { alignItems: 'center', paddingTop: spacing.xxxl * 2, gap: spacing.sm, paddingHorizontal: spacing.xl },
 });
