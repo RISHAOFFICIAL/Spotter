@@ -251,6 +251,48 @@ try:
             f"parsed {bar_parsed} result lines (exit={bar_guard.returncode}) — the guard lost checks")
 except Exception as e:  # node missing / script missing / timeout — never a silent skip
     rec("0c-bottom-bar", "bottom-bar guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
+# ---------------- FLOW 0d: FIRST-RUN AUTH GATE GUARD (offline) ----------------
+# Cold-reviewer audit (2026-09-23, /home/team/shared/first-run-reviewer-audit-2026-09-23.md):
+# _layout.tsx's conditional <Stack.Screen> list is an ORDER choice, not a gate —
+# expo-router's StackClient calls withLayoutContext with two args, so
+# useOnlyUserDefinedScreens defaults false and every filesystem route registers.
+# So a session-less user could be sent into (onboarding) (its "Let's go" then read
+# 'No session found. Please sign in again.' and show NOTHING) or into Home (only
+# content: "No session. Sign in to log.", with no sign-in affordance). Both were
+# reachable from the Welcome screen's own controls. scripts/smoke/auth-gate-guard.cjs
+# renders the REAL route/screen files in plain Node and proves: a session-less
+# state cannot mount onboarding/onboarding-steps/Home/HomeScreen/Profile/Promises
+# (each renders <Redirect href="/(auth)/welcome"> instead), with a session the same
+# routes still render; a REAL commitOnboarding failure ('No session found…', and the
+# FK text) reaches the UI above the CTA with the CTA in its loading state; the
+# Welcome screen has no skip that leaves it unauthenticated; both camera-denial
+# surfaces carry a control that really calls Linking.openSettings(); and app.json
+# no longer advertises the unused Face ID prompt. Both halves carry hand-built
+# negative controls, and the whole guard was run against unfixed master first
+# (21 FAIL / 8 PASS — recorded in review-artifacts). Same gate as flows 0/0b/0c:
+# missing/shrunken = FAIL, and any FAIL exits non-zero.
+AUTH_GATE_GUARD_SCRIPT = os.path.join(REPO_ROOT, "scripts", "smoke", "auth-gate-guard.cjs")
+AUTH_GATE_GUARD_CHECKS = 29  # every PASS/FAIL line it prints; a shrink is itself a failure
+print(f"[guard] node {AUTH_GATE_GUARD_SCRIPT} (cwd={REPO_ROOT})", flush=True)
+try:
+    auth_gate_guard = subprocess.run(["node", AUTH_GATE_GUARD_SCRIPT], cwd=REPO_ROOT,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     text=True, timeout=300)
+    auth_gate_parsed = 0
+    for agline in (auth_gate_guard.stdout or "").splitlines():
+        agm = re.match(r"^(PASS|FAIL)\s+(.*?)(?:\s+::\s+(.*))?$", agline.rstrip())
+        if not agm:
+            continue
+        auth_gate_parsed += 1
+        rec("0d-auth-gate", agm.group(2).strip(), agm.group(1), (agm.group(3) or "").strip())
+    if auth_gate_parsed == 0:
+        rec("0d-auth-gate", "auth-gate guard emitted PASS/FAIL lines", FAIL,
+            f"parsed 0 result lines, exit={auth_gate_guard.returncode}, stderr={short((auth_gate_guard.stderr or '').strip())}")
+    elif auth_gate_parsed != AUTH_GATE_GUARD_CHECKS:
+        rec("0d-auth-gate", f"auth-gate guard reported all {AUTH_GATE_GUARD_CHECKS} checks", FAIL,
+            f"parsed {auth_gate_parsed} result lines (exit={auth_gate_guard.returncode}) — the guard lost checks")
+except Exception as e:  # node missing / script missing / timeout — never a silent skip
+    rec("0d-auth-gate", "auth-gate guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
 # ---------------- FLOW 1: SIGNUP + SIGNIN ----------------
 users = {}
 for k in "abc":
