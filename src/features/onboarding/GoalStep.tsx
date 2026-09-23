@@ -19,9 +19,12 @@ interface Props {
   onSkip: () => void;
   onBack?: () => void;
   completionDay: string;
+  /** R2: set when the commit this step can trigger (Skip for now = commit
+   * defaults) failed — must be visible, never a dead-looking control. */
+  error?: string | null;
 }
 
-export function GoalStep({ value, onChange, onNext, onSkip, onBack, completionDay }: Props) {
+export function GoalStep({ value, onChange, onNext, onSkip, onBack, completionDay, error }: Props) {
   const chips = [1, 2, 3, 4, 5, 6, 7];
   return (
     <OnboardingScreen
@@ -31,6 +34,7 @@ export function GoalStep({ value, onChange, onNext, onSkip, onBack, completionDa
       primaryLabel="Next"
       onPrimary={onNext}
       primaryDisabled={false}
+      error={error}
     >
       <View style={styles.content}>
         <Text style={[textStyles.display.style, styles.headline]}>How many days a week?</Text>
