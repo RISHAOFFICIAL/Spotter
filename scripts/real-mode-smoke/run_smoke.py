@@ -193,7 +193,7 @@ except Exception as e:  # node missing / script missing / timeout — never a si
 #                                            the real grade (tone by tone) + teeth
 LOOKS_DIR = os.path.join(REPO_ROOT, "scripts", "looks")
 LOOK_SCRIPTS = [
-    ("0b-look-bake", os.path.join(LOOKS_DIR, "bake-harness.mjs"), 38),
+    ("0b-look-bake", os.path.join(LOOKS_DIR, "bake-harness.mjs"), 34),
     ("0c-look-preview", os.path.join(LOOKS_DIR, "check-look-previews.mjs"), 37),
 ]
 for flow, script, expected in LOOK_SCRIPTS:

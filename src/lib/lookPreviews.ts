@@ -188,7 +188,7 @@ export function parseHex(color: string): [number, number, number] {
 export function toHex(rgb: RGB): string {
   const h = (v: number) => {
     const r = Math.round(v);
-    return (r < 0 ? 0 : r > 255 ? 255 : r).toString(16).padStart(2, '0');
+    return (r < 0 ? 0 : r > 255 ? 255 : r).toString(16).padStart(2, '0').toUpperCase();
   };
   return `#${h(rgb[0])}${h(rgb[1])}${h(rgb[2])}`;
 }
@@ -219,14 +219,56 @@ export function lookSwatch(id: LookId): { from: string; to: string } {
  * without re-running scripts/looks/check-look-previews.mjs.
  */
 export const LOOK_PREVIEWS: Record<LookId, LookPreview> = {
-  clean: { layers: [], swatch: { from: '#282828', to: '#DEB296' } },
-  bright: { layers: [], swatch: { from: '#313131', to: '#E7C3A5' } },
-  amber: { layers: [], swatch: { from: '#373737', to: '#EEC1A0' } },
-  vivid: { layers: [], swatch: { from: '#292929', to: '#DFB196' } },
-  film: { layers: [], swatch: { from: '#333231', to: '#DDB4A1' } },
-  dusk: { layers: [], swatch: { from: '#302F31', to: '#D5AFA7' } },
-  cool: { layers: [], swatch: { from: '#232A2F', to: '#D4B7B2' } },
-  mono: { layers: [], swatch: { from: '#2E2E2E', to: '#B3B3B3' } },
+  clean: {
+    layers: [],
+    swatch: { from: '#282828', to: '#DEB296' },
+  },
+  bright: {
+    layers: [
+      { color: '#BFBFBF', alpha: 0.341, blend: 'soft-light' },
+    ],
+    swatch: { from: '#313131', to: '#E3BEA3' },
+  },
+  amber: {
+    layers: [
+      { color: '#FFDCBF', alpha: 0.37, blend: 'darken' },
+      { color: '#FFBBA0', alpha: 0.304, blend: 'soft-light' },
+    ],
+    swatch: { from: '#383229', to: '#E6B994' },
+  },
+  vivid: {
+    layers: [
+      { color: '#BFBFBF', alpha: 0.16, blend: 'darken' },
+      { color: '#D1BFBF', alpha: 0.16, blend: 'soft-light' },
+    ],
+    swatch: { from: '#292929', to: '#DFB997' },
+  },
+  film: {
+    layers: [
+      { color: '#A2A296', alpha: 0.083, blend: 'normal' },
+    ],
+    swatch: { from: '#373532', to: '#D9B79A' },
+  },
+  dusk: {
+    layers: [
+      { color: '#958CA2', alpha: 0.094, blend: 'normal' },
+    ],
+    swatch: { from: '#373336', to: '#D5B398' },
+  },
+  cool: {
+    layers: [
+      { color: '#A2BFFF', alpha: 0.28, blend: 'darken' },
+      { color: '#94A1FF', alpha: 0.341, blend: 'soft-light' },
+    ],
+    swatch: { from: '#27303E', to: '#C8B7AF' },
+  },
+  mono: {
+    layers: [
+      { color: '#FFFFFF', alpha: 0.56, blend: 'saturation' },
+      { color: '#A2B8A2', alpha: 0.098, blend: 'normal' },
+    ],
+    swatch: { from: '#323232', to: '#BCBCBC' },
+  },
 };
 
 export function lookPreview(id: LookId): LookPreview {

@@ -22,7 +22,7 @@
  *       node scripts/looks/check-look-previews.mjs --demo-fail=legacy   (RED demo)
  *       node scripts/looks/check-look-previews.mjs --print-tints        (devel)
  */
-import { FILTERS, ENGINE, PREVIEWS, REF_TONES, EPS, SIG, evaluateLook, severity, fmtDelta } from './look-rules.mjs';
+import { FILTERS, ENGINE, PREVIEWS, REF_TONES, EPS, SIG, RATIO_MIN, RATIO_MAX, evaluateLook, severity, fmtDelta } from './look-rules.mjs';
 
 const FLOW = 'look-previews';
 let passes = 0;
@@ -79,16 +79,35 @@ function legacyGrade(id) {
   };
 }
 
-/** The one flat layer the un-migrated camera screens draw, derived from the grade. */
+/**
+ * The one flat layer the un-migrated camera screens draw, derived from the real
+ * grade (never hand-typed).
+ *
+ * A flat NORMAL layer composites as `out = (1−α)·in + α·C` — a straight line
+ * through the bake's response — so the honest line is the SECANT through the
+ * ramp ends (tones 16 and 245): the flattened preview then matches the real bake
+ * exactly at the dark end and the bright end and differs only where the bake's
+ * curve bends (at most ~16/255 at a mid tone, for every shipped look).
+ *
+ * A layer has ONE alpha, so the alpha is the mean of the three per-channel
+ * secant gains and each channel's colour is that channel's value at the dark
+ * end; `C` is clamped to 0–255, the only approximation left, worth ≤ 1/255.
+ */
 function legacyTintFor(id) {
   const grade = FILTERS.lookGrade(id);
-  const s = [16, 128, 245].map((t) => ENGINE.gradeRgbF(grade, t, t, t)[0] - t);
-  const gain = (s[2] - s[0]) / (245 - 16);
-  const alpha = 1 - gain;
+  const LO = 16;
+  const HI = 245;
+  const dark = ENGINE.gradeRgbF(grade, LO, LO, LO);
+  const bright = ENGINE.gradeRgbF(grade, HI, HI, HI);
+  const gains = [0, 1, 2].map((c) => (bright[c] - dark[c]) / (HI - LO));
+  const alpha = 1 - gains.reduce((s, g) => s + g, 0) / 3;
   if (alpha <= 0.001) return { alpha: 0, color: null, channels: null };
-  const offset = s[1] - 128 * gain;
-  const ch = offset / alpha;
-  return { alpha, color: PREVIEWS.toHex([ch, ch, ch]), channels: [ch, ch, ch] };
+  const channels = [0, 1, 2].map((c) => clamp255((dark[c] - (1 - alpha) * LO) / alpha));
+  return { alpha, color: PREVIEWS.toHex(channels), channels };
+}
+
+function clamp255(v) {
+  return v < 0 ? 0 : v > 255 ? 255 : v;
 }
 
 function parseRgba(s) {
@@ -120,8 +139,9 @@ function main() {
 
   console.log('=== check-look-previews: the live preview tracks the bake ===');
   console.log(
-    `rule: |Δbake| > ${SIG}/255 → sign + [0.4, 1.8]× magnitude (+ ${SIG}/255 cap at the ramp ends); ` +
-      `|Δbake| ≤ ${SIG}/255 → |Δpreview| ≤ ${SIG}/255; level must never move the other way`,
+    `rule: |Δbake| > ${SIG}/255 → same direction + magnitude inside [${RATIO_MIN}, ${RATIO_MAX}]× the bake's; ` +
+      `|Δbake| ≤ ${SIG}/255 → |Δpreview| ≤ ${SIG}/255 (no invented movement); ` +
+      `the overall level must never move the other way`,
   );
 
   if (printTints) {
@@ -246,10 +266,13 @@ function main() {
     `${flipped.length - emptyMissed.length}/${flipped.length} looks rejected`,
   );
 
-  const legacyAccepted = Object.keys(LEGACY).filter(
+  // The retired table's identity entry ('none' → no grade, no tint) is NOT a
+  // teeth case: its bake moves nothing, so "preview moves nothing" is correct
+  // and the rule must accept it. The three *graded* retired looks are.
+  const legacyGraded = Object.keys(LEGACY).filter((id) => id !== 'none');
+  const legacyAccepted = legacyGraded.filter(
     (id) => evaluateLook(id, legacyGrade(id), LEGACY[id].tint ? [LEGACY[id].tint] : []).violations.length === 0,
   );
-  const legacyTotal = Object.keys(LEGACY).length;
   let legacyDetail = '';
   for (const id of Object.keys(LEGACY)) {
     const r = evaluateLook(id, legacyGrade(id), LEGACY[id].tint ? [LEGACY[id].tint] : []);
@@ -257,8 +280,24 @@ function main() {
   }
   check(
     'TEETH: the retired 4-preset table (shipped in build 28) is REJECTED',
-    legacyAccepted.length === 0,
-    `violations per retired look — ${legacyDetail}`,
+    legacyGraded.length === 3 && legacyAccepted.length === 0,
+    `violations per retired look — ${legacyDetail}(identity 'none' accepted by design)`,
+  );
+
+  // A stack that shouts far louder than the bake it stands for: one flat white
+  // layer at 50%. Every shipped look moves by ≤ ~18/255 somewhere, so this must
+  // be caught by the magnitude window, or by the no-invented-movement cap at a
+  // tone where the bake is still. It is the tooth for the rule change that lets
+  // the ramp ends use the same magnitude window as everywhere else.
+  const OVERLOUD = [{ color: '#FFFFFF', alpha: 0.5, blend: 'normal' }];
+  const loudAccepted = flipped.filter(
+    (id) => evaluateLook(id, FILTERS.lookGrade(id), OVERLOUD).violations.length === 0,
+  );
+  check(
+    'TEETH: an over-loud flat layer (white @ 50%) is REJECTED for every non-clean look',
+    loudAccepted.length === 0,
+    `${flipped.length - loudAccepted.length}/${flipped.length} looks rejected` +
+      (loudAccepted.length ? `; MISSED ${loudAccepted.join(', ')}` : ''),
   );
 
   let lutThrew = false;

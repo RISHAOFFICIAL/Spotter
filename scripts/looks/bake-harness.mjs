@@ -21,6 +21,7 @@
  * Wired into the smoke suite as flow 0b — see scripts/real-mode-smoke/run_smoke.py.
  */
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const { load } = require('./load-libs.cjs');
@@ -40,6 +41,31 @@ function check(name, ok, detail) {
   if (ok) passes += 1;
   else fails += 1;
   console.log(`${ok ? 'PASS' : 'FAIL'} ${name} :: ${detail}`);
+}
+
+// --------------------------------------------------------------------------
+// the bake cap (asserted from the source text, not from behaviour)
+// --------------------------------------------------------------------------
+/**
+ * The 1600 px working width is a product + performance limit, not a nice-to-have:
+ * it is what keeps the pure-JS per-pixel pass sub-second on Hermes. It cannot be
+ * *loaded* here — src/lib/selfieBake.ts imports expo-file-system and
+ * expo-image-manipulator, which are device-only — so it is asserted from that
+ * module's own source text. Raising the cap must be a deliberate, reviewed change
+ * to the constant; this check makes such a change fail loudly instead of shipping
+ * silently. NEVER raise it to make anything else pass.
+ */
+const BAKE_CAP_PX = 1600;
+const SELFIE_BAKE_SRC = readFileSync(new URL('../../src/lib/selfieBake.ts', import.meta.url), 'utf8');
+{
+  const declared = /const\s+BAKE_MAX_WIDTH\s*=\s*(\d+)\s*;/.exec(SELFIE_BAKE_SRC);
+  const usedInResize = /resize:\s*\{\s*width:\s*BAKE_MAX_WIDTH\s*\}/.test(SELFIE_BAKE_SRC);
+  check(
+    `bake cap: src/lib/selfieBake.ts works at ${BAKE_CAP_PX} px (never raise it)`,
+    declared !== null && Number(declared[1]) === BAKE_CAP_PX && usedInResize,
+    `BAKE_MAX_WIDTH=${declared ? declared[1] : 'NOT FOUND'} (cap ${BAKE_CAP_PX}); ` +
+      `resize uses the constant: ${usedInResize}`,
+  );
 }
 
 // --------------------------------------------------------------------------
@@ -220,11 +246,13 @@ console.log('\n[readout] real bake, band means off the decoded re-encode (Δ fro
 console.log('  look       black(8)      mid(120)      white(248)    | float@16    float@128    float@245');
 for (const id of FILTERS.LOOK_IDS) {
   const r = results[id];
-  const d = (arr, i) => arr[i] - inputRampValues[i];
+  // `arr` is one band (3 channel means); the baseline is the SAME band of the
+  // input, so the band index has to travel with it.
+  const d = (arr, band) => arr[0] - inputRampValues[band];
   const grade = FILTERS.lookGrade(id);
   const f = [16, 128, 245].map((t) => ENGINE.gradeRgbF(grade, t, t, t)[0] - t);
   console.log(
-    `  ${id.padEnd(9)} ${px(d(r.bands[0], 0))}  ${px(d(r.bands[7], 0))}  ${px(d(r.bands[15], 0))}` +
+    `  ${id.padEnd(9)} ${px(d(r.bands[0], 0))}  ${px(d(r.bands[7], 7))}  ${px(d(r.bands[15], 15))}` +
       `    | ${px(f[0])} ${px(f[1])} ${px(f[2])}`,
   );
 }
@@ -241,8 +269,11 @@ for (const id of FILTERS.LOOK_IDS) {
 console.log('[readout] dusk is warm in the shadows and cool in the highlights:');
 {
   const r = results['dusk'];
-  const black = r.bands[0].map((v, i) => v - inputRampValues[i]);
-  const white = r.bands[15].map((v, i) => v - inputRampValues[i]);
+  // Baseline per CHANNEL of the same band — `inputRampValues` is the red channel
+  // across bands, so indexing it by the channel number would compare band 15 of
+  // red against band 0/1/2 of the ramp (it did, and it reported the wrong verdict).
+  const black = r.bands[0].map((v, c) => v - inputBands[0][c]);
+  const white = r.bands[15].map((v, c) => v - inputBands[15][c]);
   console.log(`  black band Δ (${black.map((v) => v.toFixed(1)).join(', ')})  R>B: ${black[0] > black[2]}`);
   console.log(`  white band Δ (${white.map((v) => v.toFixed(1)).join(', ')})  B>R: ${white[2] > white[0]}`);
   check(

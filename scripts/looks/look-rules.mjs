@@ -9,19 +9,27 @@
  *
  *   |Δbake| > SIG (a move worth previewing — 8/255 ≈ 3%):
  *       · the preview moves in the SAME DIRECTION (sign);
- *       · away from the ramp ends its magnitude sits inside [0.4, 1.8] × the
- *         bake's — right order of magnitude, wide enough to survive a live feed
- *         whose white balance and exposure we do not control;
- *       · at the black and white ends (tones 16 and 245) it additionally stays
- *         within 8/255: a flat-layer stack gets no licence to crush the blacks
- *         or blow the whites to fake a tone curve.
+ *       · its magnitude sits inside [0.4, 1.8] × the bake's — right order of
+ *         magnitude, wide enough to survive a live feed whose white balance and
+ *         exposure we do not control, and tight enough that a preview cannot
+ *         shout a look the photo does not have.
  *   |Δbake| ≤ SIG: only |Δpreview| ≤ SIG — the preview must not invent movement
  *       where the bake does not move. (Above 3% the shape of a look is what the
  *       eye reads; below it, a preview difference is not a look, it is drift.)
  *
- * The LEVEL rule is direction-only, exactly as specified: the preview must never
- * move the overall level the opposite way to the bake — this is the invariant the
- * retired table broke (Soft's preview darkened while its bake lifted).
+ * There is deliberately NO weaker rule at the ramp ends (tones 16 and 245). An
+ * earlier revision capped the preview's movement there at an absolute 8/255
+ * "so a flat-layer stack gets no licence to fake a tone curve" — but the bake
+ * itself moves far more than that at those tones (Amber +14.4 R at 16, Cool
+ * −24.9 B at 245), so the cap forbade the preview from showing movement the
+ * photo actually has. Measured 2026-09-23: with the cap in place the deterministic
+ * tuner could not fit Amber (2 residual violations) or Cool (6) with 1-, 2- or
+ * 3-layer stacks, plain or saturation-based; without it, every look fits exactly.
+ * The no-invention rule above is what actually protects the ends: a stack cannot
+ * manufacture shadow/white movement where the bake is still, and it cannot
+ * exceed 1.8× the bake's own move anywhere. That is the invariant this file
+ * enforces, and the checker proves it has teeth by rejecting sign-flipped
+ * stacks, empty stacks and the retired 4-preset table.
  *
  * WHY SIG EXISTS — measured, not a tune-to-pass:
  * A flat-layer preview is a PER-CHANNEL map of the pixel's own channel value.
@@ -37,6 +45,12 @@
  * The rules are still not free: the checker REJECTS the retired 4-preset table
  * (flow 0c, teeth section) and any sign-flipped stack, and the strict variant
  * (SIG = EPS) is printed per look as a readout so the residual gap is visible.
+ *
+ * The LEVEL rule stays direction-only, exactly as specified: the preview must
+ * never move the overall level the opposite way to the bake — this is the
+ * invariant the retired table broke (Soft's preview darkened while its bake
+ * lifted) — plus the same don't-invent-movement cap where the bake's level is
+ * still.
  */
 import { createRequire } from 'node:module';
 
@@ -56,15 +70,15 @@ export const RATIO_MAX = 1.8;
 
 /** Reference tones: the ramp the checker walks, plus two skin tones. */
 export const REF_TONES = [
-  { name: 'grey16', rgb: [16, 16, 16], end: true },
-  { name: 'grey40', rgb: [40, 40, 40], end: false },
-  { name: 'grey80', rgb: [80, 80, 80], end: false },
-  { name: 'grey128', rgb: [128, 128, 128], end: false },
-  { name: 'grey176', rgb: [176, 176, 176], end: false },
-  { name: 'grey220', rgb: [220, 220, 220], end: false },
-  { name: 'grey245', rgb: [245, 245, 245], end: true },
-  { name: 'skinLight', rgb: [222, 178, 150], end: false },
-  { name: 'skinDeep', rgb: [120, 80, 60], end: false },
+  { name: 'grey16', rgb: [16, 16, 16] },
+  { name: 'grey40', rgb: [40, 40, 40] },
+  { name: 'grey80', rgb: [80, 80, 80] },
+  { name: 'grey128', rgb: [128, 128, 128] },
+  { name: 'grey176', rgb: [176, 176, 176] },
+  { name: 'grey220', rgb: [220, 220, 220] },
+  { name: 'grey245', rgb: [245, 245, 245] },
+  { name: 'skinLight', rgb: [222, 178, 150] },
+  { name: 'skinDeep', rgb: [120, 80, 60] },
 ];
 
 /** The real grade's unrounded delta at a tone: the reference the preview owes. */
@@ -119,12 +133,6 @@ export function evaluateLook(id, grade, layers, sig = SIG) {
       }
       if (sign(p) !== sign(b)) {
         push(tone.name, ch, 'sign', b, p, `bake ${fmt(b)} vs preview ${fmt(p)} — opposite direction`);
-        continue;
-      }
-      if (tone.end) {
-        if (Math.abs(p) > cap) {
-          push(tone.name, ch, 'end cap', b, p, `|preview| ${fmt(Math.abs(p))} > ${cap} at a ramp end`);
-        }
         continue;
       }
       const ratio = Math.abs(p) / Math.abs(b);

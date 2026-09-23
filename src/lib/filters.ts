@@ -173,11 +173,15 @@ export function lookReceiptLabel(id: LookId | LegacyLookId): string {
  * The pre-8-look API, kept so the untouched camera screens keep compiling and
  * behaving (they read `.label` and `.previewTint` off `SELFIE_FILTER_PRESETS`).
  *
- * `previewTint` is the ONE flat layer an un-migrated screen can draw: the
- * secant flatten of this look's REAL baked response between tones 16 and 245,
- * anchored at the mid tone 128 (alpha = 1 − secant gain, colour = offset/alpha).
- * It is a deliberate, documented approximation of `LOOK_PREVIEWS[id]`'s layered
- * stack — the checker asserts the literals still match the grade.
+ * `previewTint` is the ONE flat layer an un-migrated screen can draw: the SECANT
+ * flatten of this look's REAL baked response through the ramp ends (tones 16 and
+ * 245) — a flat normal layer composites as `out = (1 − α)·in + α·C`, so the
+ * alpha is `1 − mean(per-channel secant gain)` and the colour is each channel's
+ * value at the dark end. That makes the shim exact at the dark and bright ends
+ * and up to ~16/255 off at a mid tone, which is the honest limit of one flat
+ * layer (a layer has one alpha). It is a deliberate, documented approximation of
+ * `LOOK_PREVIEWS[id]`'s layered stack — the checker recomputes both and fails if
+ * these literals drift from the grade.
  */
 export interface SelfieFilterPreset {
   readonly id: SelfieFilter;
@@ -198,16 +202,16 @@ export const SELFIE_FILTER_PRESETS: Record<SelfieFilter, SelfieFilterPreset> = (
   });
   return {
     clean: byId('clean', null),
-    bright: byId('bright', tint(0.088, 255, 255, 255)),
-    amber: byId('amber', tint(0.118, 255, 212, 128)),
-    vivid: byId('vivid', tint(0.06, 255, 196, 196)),
-    film: byId('film', tint(0.055, 196, 200, 190)),
-    dusk: byId('dusk', tint(0.075, 216, 200, 232)),
-    cool: byId('cool', tint(0.075, 128, 176, 255)),
-    mono: byId('mono', tint(0.05, 180, 180, 180)),
+    bright: byId('bright', tint(0.029, 224, 224, 224)),
+    amber: byId('amber', tint(0.089, 177, 122, 28)),
+    vivid: byId('vivid', tint(0.063, 40, 40, 40)),
+    film: byId('film', tint(0.116, 153, 136, 111)),
+    dusk: byId('dusk', tint(0.132, 150, 112, 137)),
+    cool: byId('cool', tint(0.107, 0, 67, 187)),
+    mono: byId('mono', tint(0.103, 113, 113, 113)),
     // Legacy aliases (their chips are gone; these only serve stale call sites).
     none: byId('clean', null),
-    warm: byId('amber', tint(0.118, 255, 212, 128)),
+    warm: byId('amber', tint(0.089, 177, 122, 28)),
     soft: byId('clean', null),
   };
 })();

@@ -74,7 +74,7 @@ function toStack(modes, params) {
 }
 
 function hex(c) {
-  const h = (v) => clamp(Math.round(v), 0, 255).toString(16).padStart(2, '0');
+  const h = (v) => clamp(Math.round(v), 0, 255).toString(16).padStart(2, '0').toUpperCase();
   return `#${h(c[0])}${h(c[1])}${h(c[2])}`;
 }
 
@@ -82,15 +82,10 @@ function hex(c) {
 function margin(result, sig = SIG) {
   let m = Infinity;
   for (const t of result.tones) {
-    const isEnd = REF_TONES.find((r) => r.name === t.tone).end;
     for (let c = 0; c < 3; c += 1) {
       const b = Math.abs(t.db[c]);
       const p = Math.abs(t.dp[c]);
       if (b <= sig) {
-        m = Math.min(m, (SIG - p) / SIG);
-        continue;
-      }
-      if (isEnd) {
         m = Math.min(m, (SIG - p) / SIG);
         continue;
       }
