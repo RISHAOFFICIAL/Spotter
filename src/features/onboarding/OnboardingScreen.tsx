@@ -35,17 +35,22 @@ export function OnboardingScreen({
   onPrimary,
   primaryDisabled = false,
   primaryLoading = false,
+  error,
   footer,
 }: {
   step: 1 | 2 | 3 | 4;
   children: React.ReactNode;
   onBack?: () => void;
-  onSkip: () => void;
+  /** Required only when the step is skippable (canSkip). */
+  onSkip?: () => void;
   canSkip?: boolean;
   primaryLabel: string;
   onPrimary: () => void;
   primaryDisabled?: boolean;
   primaryLoading?: boolean;
+  /** R2: a failed write on the final commit — rendered above the CTA so a
+   * "dead" button always reads as a failure, never as a hang. */
+  error?: string | null;
   footer?: React.ReactNode;
 }) {
   return (
@@ -74,6 +79,14 @@ export function OnboardingScreen({
         <View style={styles.content}>{children}</View>
         <View style={styles.actions}>
           {footer}
+          {error ? (
+            <Text
+              accessibilityLiveRegion="polite"
+              style={[textStyles.caption.style, styles.errorLine]}
+            >
+              {error}
+            </Text>
+          ) : null}
           <AppButton
             label={primaryLabel}
             onPress={onPrimary}
@@ -81,7 +94,7 @@ export function OnboardingScreen({
             loading={primaryLoading}
             type="primary"
           />
-          {canSkip && (
+          {canSkip && onSkip && (
             <View style={styles.skipRow}>
               <TextButton label="Skip for now" onPress={onSkip} color={colors.text.muted.hex} />
             </View>
@@ -106,5 +119,6 @@ const styles = StyleSheet.create({
   headerRight: { width: 32 },
   content: { flex: 1 },
   actions: { paddingBottom: spacing.xl, gap: spacing.md },
+  errorLine: { color: colors.text.danger.hex, textAlign: 'center' },
   skipRow: { alignItems: 'center', marginTop: spacing.xs },
 });

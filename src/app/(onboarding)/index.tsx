@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router';
 import { GoalStep } from '@/features/onboarding/GoalStep';
 import { PracticeCamStep } from '@/features/onboarding/PracticeCamStep';
 import { WeekStartStep } from '@/features/onboarding/WeekStartStep';
+import { RequireSession } from '@/features/auth/RequireSession';
 import { useAuth } from '@/features/auth/AuthProvider';
 import {
   DEFAULT_WEEK_START,
@@ -30,55 +31,64 @@ export default function OnboardingRoute() {
   const [weeklyGoal, setWeeklyGoal] = useState<number>(DEFAULT_WEEKLY_GOAL);
   const [weekStart, setWeekStart] = useState(DEFAULT_WEEK_START);
   const [committing, setCommitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const completionDay = useMemo(() => completionDayLabel(weeklyGoal, weekStart), [weeklyGoal, weekStart]);
   const finish = async (skipDefaults: boolean) => {
     if (committing) return;
     const settings: OnboardingSettings = skipDefaults
       ? { weeklyGoal: DEFAULT_WEEKLY_GOAL, weekStart: DEFAULT_WEEK_START }
       : { weeklyGoal, weekStart };
+    setError(null);
     setCommitting(true);
     const res = await commitOnboarding(settings);
     await refresh();
     setCommitting(false);
     if (!res.ok) {
-      // stay on this screen; retry keeps state (spec: no dead-end)
+      // R2: a failed write must SAY SO. Swallowing res.error left "Let's go"
+      // looking dead (the same visible symptom the FK blocker produced).
+      setError(res.error ?? 'Something went wrong. Try again.');
       return;
     }
-    if (skipDefaults) {
-      // Typed route literal (router.d.ts collapses (home)/(tabs)/index to
-      // '/(home)/(tabs)'); '/(home)' alone is not accepted by the href union.
-      router.replace('/(home)/(tabs)');
-      return;
-    }
+    // Typed route literal (router.d.ts collapses (home)/(tabs)/index to
+    // '/(home)/(tabs)'); '/(home)' alone is not accepted by the href union.
     router.replace('/(home)/(tabs)');
   };
+  // R1: with no session this route must not render at all — its commit would
+  // fail with 'No session found. Please sign in again.' and the reviewer would
+  // be stuck on a dead "Let's go". RequireSession renders <Redirect> instead, so
+  // no step below ever mounts.
   return (
-    <View style={{ flex: 1 }}>
-      {step === 1 && (
-        <PracticeCamStep
-          onNext={() => setStep(2)}
-          onSkip={() => setStep(2)}
-        />
-      )}
-      {step === 2 && (
-        <GoalStep
-          value={weeklyGoal}
-          onChange={setWeeklyGoal}
-          onNext={() => setStep(3)}
-          onSkip={() => finish(true)}
-          onBack={() => setStep(1)}
-          completionDay={completionDay}
-        />
-      )}
-      {step === 3 && (
-        <WeekStartStep
-          value={weekStart}
-          onChange={setWeekStart}
-          onFinish={() => finish(false)}
-          onSkip={() => finish(true)}
-          onBack={() => setStep(2)}
-        />
-      )}
-    </View>
+    <RequireSession>
+      <View style={{ flex: 1 }}>
+        {step === 1 && (
+          <PracticeCamStep
+            onNext={() => setStep(2)}
+            onSkip={() => setStep(2)}
+          />
+        )}
+        {step === 2 && (
+          <GoalStep
+            value={weeklyGoal}
+            onChange={setWeeklyGoal}
+            onNext={() => setStep(3)}
+            onSkip={() => finish(true)}
+            onBack={() => setStep(1)}
+            completionDay={completionDay}
+            error={error}
+          />
+        )}
+        {step === 3 && (
+          <WeekStartStep
+            value={weekStart}
+            onChange={setWeekStart}
+            onFinish={() => finish(false)}
+            onSkip={() => finish(true)}
+            onBack={() => setStep(2)}
+            error={error}
+            loading={committing}
+          />
+        )}
+      </View>
+    </RequireSession>
   );
 }

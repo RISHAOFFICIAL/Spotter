@@ -15,8 +15,8 @@
  * to back) → 'shot2' (back lens forced, ALWAYS unfiltered) → 'review' (two
  * thumbs, practice caption, one Retake that redoes both shots) → Next (shell
  * CTA, always enabled — capture is encouraged, not required). 'denied' keeps
- * the step skippable: camera hides, Settings escape hatch is stated, preview
- * frame + Next remain.
+ * the step skippable: camera hides, the Settings escape hatch is a real
+ * control (OpenSettingsButton), preview frame + Next remain.
  *
  * Filters: the SELFIE_FILTER_* chip row + live tint from src/lib/filters.ts
  * are reused on the selfie stage as a LIVE PREVIEW ONLY — no bake, no upload
@@ -57,6 +57,7 @@ type CameraViewProps_ = {
 const CameraViewT = CameraView as unknown as React.ComponentType<CameraViewProps_>;
 
 import { AppButton, TextButton } from '@/components/AppButton';
+import { OpenSettingsButton } from '@/components/OpenSettingsButton';
 import { WeeklyRing } from '@/features/home/WeeklyRing';
 import { colors, icons, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
@@ -282,6 +283,10 @@ export function PracticeCamStep({ onNext, onSkip }: { onNext: () => void; onSkip
             <Text style={[textStyles.bodyStrong.style, styles.deniedLine]}>
               That’s okay — camera stays off for now. Logging still works once you allow it in Settings.
             </Text>
+            {/* R3 (first-run audit 2026-09-23): the copy pointed at Settings and
+                gave no way to reach it (Linking appeared nowhere in src/).
+                Guideline 5.1.1 wants a way forward from the denial. */}
+            <OpenSettingsButton />
             <PreviewFrame />
             <StakesLine />
           </ScrollView>

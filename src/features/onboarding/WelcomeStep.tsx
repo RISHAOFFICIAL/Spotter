@@ -64,7 +64,15 @@ export function WelcomeStep({
   return (
     <OnboardingScreen
       step={1}
-      onSkip={() => onDone()}
+      // R1 (first-run audit 2026-09-23): this step used to wire "Skip for now"
+      // to the AUTHENTICATED path (onDone → refresh + replace('/(onboarding)')).
+      // With no session that walked a reviewer into onboarding, where the final
+      // commit fails 'No session found. Please sign in again.' and nothing said
+      // so — a dead button, two taps from a cold install. There is no step to
+      // skip before sign-in, so the control is gone: the only ways off this
+      // screen are "Get started" (the account form), the invite-code row and
+      // the share row. `canSkip={false}` keeps re-wiring it impossible.
+      canSkip={false}
       primaryLabel="Get started"
       onPrimary={() => (showAuth ? submit() : setShowAuth(true))}
       primaryDisabled={showAuth ? !email || !password : false}

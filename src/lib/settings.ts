@@ -57,6 +57,29 @@ export async function commitOnboarding(settings: OnboardingSettings): Promise<{ 
     // and the schema is applied. Until then this branch is unreachable.
     try {
       const userId = session.user.id;
+
+      // ORDER IS LOAD-BEARING: the caller's own `users` row is written FIRST,
+      // before anything that references it. `groups.creator_id` and
+      // `memberships.user_id` are foreign keys to `public.users(id)`
+      // (schema.sql:55 / :86), and nothing mirrors `auth.users` →
+      // `public.users` (the live project has no `handle_new_user` trigger), so
+      // on a brand-new signup this upsert is the ONLY thing that creates the
+      // row. It used to run AFTER the Personal-group insert, which made
+      // onboarding fail for every new account with
+      //   insert or update on table "groups" violates foreign key constraint
+      //   "groups_creator_id_fkey"
+      // — the user could never get past the onboarding screen (F1,
+      // 2026-09-23). Keep this write above the group lookup/insert.
+      // Idempotent: re-onboarding upserts in place and preserves
+      // `users.created_at`, which is the onboarding marker AuthProvider reads.
+      const { error: userError } = await supabase!.from('users').upsert({
+        id: userId,
+        name: session.user.email.split('@')[0],
+        week_start_day: settings.weekStart,
+        timezone: detectTimezone(),
+      });
+      if (userError) return { ok: false, error: userError.message };
+
       // Ensure the user has a personal group (SLICE A: no group UI yet, but
       // memberships.group_id is NOT NULL in the schema, so the upsert can't
       // omit it). One row per user; idempotent on re-onboarding.
@@ -74,14 +97,6 @@ export async function commitOnboarding(settings: OnboardingSettings): Promise<{ 
         if (createError || !created) return { ok: false, error: createError?.message ?? 'Could not create your group.' };
         groupId = created.id;
       }
-
-      const { error: userError } = await supabase!.from('users').upsert({
-        id: userId,
-        name: session.user.email.split('@')[0],
-        week_start_day: settings.weekStart,
-        timezone: detectTimezone(),
-      });
-      if (userError) return { ok: false, error: userError.message };
 
       // `unique (group_id, user_id)` exists in schema.sql — without
       // onConflict a re-onboarding (commitOnboarding on an already-committed
