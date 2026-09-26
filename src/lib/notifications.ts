@@ -6,8 +6,11 @@
  *      paired AND has completed their first return visit to Home (see
  *      HomeScreen — the ask fires once the pairing flip has settled AND a
  *      foreground load has run, i.e. a "return visit"). The sheet says exactly
- *      what notifications DO today (partner logs + invite accepted — "nothing
- *      else"), no invented variants.
+ *      what notifications DO today — the two own-device types (the invite
+ *      still-waiting nudge and the missed-week alert), and nothing else; it
+ *      makes no claim about a partner-log or invite-accepted alert, which are
+ *      cross-user and cannot resolve a device token (see
+ *      features/invites/NotificationsSheet.tsx and push-copy-guard.cjs).
  *   2. "Enable" then triggers the REAL OS permission prompt (expo-notifications
  *      getPermissionsAsync/requestPermissionsAsync). Dev mode mocks the grant.
  *

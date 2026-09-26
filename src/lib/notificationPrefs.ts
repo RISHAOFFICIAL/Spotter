@@ -22,6 +22,19 @@
  * The four types also live in a typed list so UI + smoke iterate the SAME set —
  * a fifth type cannot silently diverge between the sheet, the Profile toggles
  * and the test.
+ *
+ * REACHABILITY (verified at source 2026-09-23, re-checked against the code
+ * below): the four types split into two OWN-DEVICE types that DO deliver —
+ * pending_invite and missed_week, whose recipient is the current user — and two
+ * CROSS-USER types that CANNOT deliver in a real build: partner_logged and
+ * invite_accepted. For a non-self recipient resolveRealTarget
+ * (pushDispatch.ts:219-225) returns expoPushToken: null without even attempting
+ * a read (own-row RLS on push_devices), which becomes the suppression reason
+ * 'no_device'. So the toggles for those two stay (a post-launch backend fix
+ * makes them true — backlog aa491a2b) but neither their label nor their caption
+ * may promise that the alert arrives. scripts/smoke/push-copy-guard.cjs gates
+ * that, and it also protects the two own-device captions from being weakened.
+ * Evidence: /home/team/shared/push-reachability-verified-2026-09-23.md.
  */
 import { devMock, type NotificationPrefsRow } from './mock';
 import { getStoredSession, supabase } from './supabase';
@@ -59,11 +72,19 @@ export const NOTIFICATION_META: Record<
 > = {
   invite_accepted: {
     label: 'Invite accepted',
-    caption: 'When someone you invited pairs up.',
+    // NOT SENDING YET (verified 2026-09-23): the recipient is the inviter and
+    // the client-initiated dispatcher cannot read another user's push_devices
+    // row (own-row RLS) — resolveRealTarget returns a null token, so the send
+    // suppresses as 'no_device' in a real build. The toggle STAYS (a
+    // post-launch backend fix makes it true, backlog aa491a2b) and the caption
+    // must never promise the alert. Gated by push-copy-guard.cjs.
+    caption: 'Not sending yet — your setting is saved.',
   },
   partner_logged: {
     label: 'Partner logged',
-    caption: 'When your partner logs a workout.',
+    // Same cross-user reality as invite_accepted: the LOGGER's device cannot
+    // resolve the PARTNER's token, so this never delivers in a real build.
+    caption: 'Not sending yet — your setting is saved.',
   },
   pending_invite: {
     label: 'Invite still waiting',

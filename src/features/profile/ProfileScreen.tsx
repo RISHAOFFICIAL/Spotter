@@ -478,7 +478,7 @@ export function ProfileScreen() {
             <Text style={[textStyles.caption.style, { color: colors.text.danger.hex }]}>{notifError}</Text>
           )}
           <Text style={[textStyles.caption.style, { color: colors.text.muted.hex, marginTop: spacing.xs }]}>
-            Off until you turn them on. You can change these anytime.
+            You can change these anytime. Missed week starts off.
           </Text>
         </View>
 

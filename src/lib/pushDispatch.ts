@@ -8,9 +8,16 @@
  *   perspective, and when a condition fires it sends the push for the
  *   RECIPIENT (partner or self) through the Expo Push HTTP API, then logs a
  *   push_deliveries row for the funnel. This is a recognized limitation, not
- *   a bug: sends only happen when someone opens the app, so a workout your
- *   partner logs won't push to you until the LOGGING USER's next open (their
- *   app evaluates partner_logged at send time and writes the row). Real
+ *   a bug: sends only happen when someone opens the app. For the TWO
+ *   CROSS-USER types there is a second, harder limit — they cannot send at all
+ *   in a real build. resolveRealTarget returns expoPushToken: null for any
+ *   recipient other than the current user (own-row RLS on push_devices), which
+ *   becomes the suppression reason 'no_device'; so partner_logged and
+ *   invite_accepted never deliver. The two OWN-DEVICE types (pending_invite,
+ *   missed_week) do deliver. Verified at source 2026-09-23; evidence in
+ *   /home/team/shared/push-reachability-verified-2026-09-23.md. The copy that
+ *   used to promise the cross-user alerts is gone — see
+ *   scripts/smoke/push-copy-guard.cjs. The dispatch below is unchanged. Real
  *   end-to-end delivery is verified at TestFlight with the runbook; this
  *   slice proves the evaluation + suppression + dedupe + logging logic with
  *   full dev parity (no network).
@@ -45,12 +52,13 @@
  *     - missed_week     → recipient = the CURRENT user (the missed member).
  *       Row written on their own device. ✓
  *     - invite_accepted → recipient = the INVITER. The ACCEPTOR's device
- *       evaluates it (their open) and CANNOT write the inviter's row under
- *       own-row RLS. In real mode the send still happens (the Expo API
- *       accepts any token) but the row insert is rejected by RLS — the
- *       dispatcher surfaces that honestly rather than fabricating a row. The
- *       inviter's own next open re-evaluates nothing for this event kind
- *       (dedupe lives on the rows that exist) — the runbook notes this.
+ *       evaluates it (their open). In real mode there is NO send and NO row:
+ *       the recipient is not the current user, so resolveRealTarget returns a
+ *       null token and the dispatcher suppresses with 'no_device' (own-row RLS
+ *       on push_devices is the cause). DEV MOCK IS THE ONLY PLACE THIS TYPE
+ *       SENDS, and that is all the smoke harness proves — it is NOT evidence
+ *       of real-mode delivery. The row-write half is the same story: the
+ *       acceptor could not write the inviter's row under own-row RLS either.
  *     - partner_logged  → recipient = the partner; the LOGGER's device
  *       evaluates; same own-row reality as invite_accepted. In DEV the
  *       per-recipient stores accept any writer (mirror of the real table
