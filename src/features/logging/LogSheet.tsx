@@ -49,6 +49,7 @@ type CameraViewProps_ = {
 const CameraViewT = CameraView as unknown as React.ComponentType<CameraViewProps_>;
 
 import { AppButton } from '@/components/AppButton';
+import { OpenSettingsButton } from '@/components/OpenSettingsButton';
 import { colors, motion, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
 import { logWorkout, type NewWorkout } from '@/lib/workoutStore';
@@ -229,7 +230,12 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
     }, motion.confirmMs);
   }, [selfie, env, caption, workoutType, onLogged, onClose]);
 
-  const isFirstRun = !permission?.granted;
+  // R3: the OS has refused the camera and will not ask again — the one state
+  // where the only way forward is Settings. (Before this, the "Allow it in
+  // Settings" line at the fallback was unreachable: it was gated on the
+  // permission being GRANTED while the branch it sits in only renders when it
+  // is NOT.)
+  const cameraDenied = !permission?.granted && permission?.canAskAgain === false;
   const isCaptureStage = stage === 'shot1' || stage === 'shot2' || stage === 'flip';
   const shotNumLabel = stage === 'shot2' ? 'SHOT 2 OF 2' : 'SHOT 1 OF 2';
   const shotAnnouncement = stage === 'shot2' ? 'Shot 2 of 2 — back camera' : 'Shot 1 of 2 — front camera';
@@ -252,14 +258,18 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
                   {/* Camera surface — stays dark in the light theme; text stays light. */}
                   <Ionicons name="camera-outline" size={44} color="rgba(255,255,255,0.70)" />
                   <Text style={[textStyles.caption.style, { color: 'rgba(255,255,255,0.92)', textAlign: 'center' }]}>
-                    {isFirstRun
-                      ? 'We\u2019ll ask for camera access when you tap the shutter.'
-                      : 'Camera access is off.'}
+                    {cameraDenied
+                      ? 'Camera access is off.'
+                      : 'We\u2019ll ask for camera access when you tap the shutter.'}
                   </Text>
-                  {!isFirstRun && (
-                    <Text style={[textStyles.label.style, { color: 'rgba(255,255,255,0.70)', textAlign: 'center' }]}>
-                      Allow it in Settings to log with photo proof.
-                    </Text>
+                  {cameraDenied && (
+                    <>
+                      <Text style={[textStyles.label.style, { color: 'rgba(255,255,255,0.70)', textAlign: 'center' }]}>
+                        Allow it in Settings to log with photo proof.
+                      </Text>
+                      {/* R3: the copy said "in Settings" with no way to get there. */}
+                      <OpenSettingsButton color="rgba(255,255,255,0.92)" />
+                    </>
                   )}
                 </View>
               )}
@@ -375,9 +385,12 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
                 </Pressable>
               </View>
               {error && (
-                <Text style={[textStyles.caption.style, { color: colors.text.danger.hex, textAlign: 'center' }]}>
-                  {error}
-                </Text>
+                <View style={styles.errorRow}>
+                  <Text style={[textStyles.caption.style, styles.errorText]}>{error}</Text>
+                  {/* R3: the permission error says "in Settings" — this is the
+                      control that takes them there. */}
+                  {!permission?.granted && <OpenSettingsButton color={colors.text.primary.hex} />}
+                </View>
               )}
             </View>
           </>
@@ -763,6 +776,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  errorRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  errorText: { color: colors.text.danger.hex, textAlign: 'center', flexShrink: 1 },
   previewModalImg: { width: '100%', height: '100%' },
   previewModalClose: {
     position: 'absolute',

@@ -58,8 +58,7 @@
       [
         "expo-secure-store",
         {
-          "configureAndroidBackup": true,
-          "faceIDPermission": "Allow SPOTTER to use Face ID to unlock your account."
+          "configureAndroidBackup": true
         }
       ]
     ],

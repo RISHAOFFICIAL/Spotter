@@ -19,11 +19,15 @@ interface Props {
   onFinish: () => void;
   onSkip: () => void;
   onBack?: () => void;
+  /** R2: the commit's failure message, rendered above the CTA. */
+  error?: string | null;
+  /** R2: true while the commit is in flight, so "Let's go" reads as working. */
+  loading?: boolean;
 }
 
 const DAYS: WeekStartDay[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-export function WeekStartStep({ value, onChange, onFinish, onSkip, onBack }: Props) {
+export function WeekStartStep({ value, onChange, onFinish, onSkip, onBack, error, loading = false }: Props) {
   return (
     <OnboardingScreen
       step={4}
@@ -32,6 +36,8 @@ export function WeekStartStep({ value, onChange, onFinish, onSkip, onBack }: Pro
       primaryLabel="Let's go"
       onPrimary={onFinish}
       primaryDisabled={false}
+      primaryLoading={loading}
+      error={error}
     >
       <View style={styles.content}>
         <Text style={[textStyles.display.style, styles.headline]}>When does your week start?</Text>

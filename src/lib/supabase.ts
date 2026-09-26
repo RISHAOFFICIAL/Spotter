@@ -170,6 +170,19 @@ export async function authenticate(email: string, password: string): Promise<Aut
       if (signUpError) {
         return { ok: false, error: signUpError.message ?? 'Sign-up failed.' };
       }
+      // R2 (first-run audit 2026-09-23): a sign-up is only a sign-IN when
+      // Supabase hands back a session. With "Confirm email" ON it returns no
+      // session, and this used to report {ok:true} anyway — the reviewer then
+      // advanced into onboarding (or Home) where EVERY write fails with
+      // 'No session found. Please sign in again.' and nothing explains why.
+      // Say it here, where the message is shown under the form.
+      const { data: afterSignUp } = await (supabase.auth as unknown as AuthClientLike).getSession();
+      if (!afterSignUp.session) {
+        return {
+          ok: false,
+          error: `Account created. Confirm ${normalized} from your email, then tap Get started to sign in.`,
+        };
+      }
       // V1.1 measurement: signup_completed (REAL insert; never blocks auth).
       void track('signup_completed');
       return { ok: true };
