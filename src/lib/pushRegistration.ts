@@ -22,6 +22,10 @@ import * as Notifications from 'expo-notifications';
 
 import { devMock, type DevPushDevice } from './mock';
 import { getStoredSession, supabase } from './supabase';
+// `app_version` is the number this build shipped as — derived from app.json by
+// src/lib/appVersion.ts, never a literal here (the literal drifted to 1.1.0
+// while app.json declared 1.0.0).
+import { APP_VERSION } from './appVersion';
 import { isDevMode } from './supabase';
 
 /** Explicit default channel so Android notifications land on a named channel
@@ -74,7 +78,7 @@ export async function registerPushDevice(): Promise<boolean> {
       user_id: session.user.id,
       expo_push_token: token,
       platform: 'dev',
-      app_version: '1.1.0',
+      app_version: APP_VERSION,
       last_seen_at: now,
       created_at: now,
     };
@@ -91,7 +95,7 @@ export async function registerPushDevice(): Promise<boolean> {
         // Device.osName exists on the expo-device module type ('iOS' |
         // 'Android' | other); Device.platform does not — use osName.
         platform: Device.osName ?? null,
-        app_version: '1.1.0',
+        app_version: APP_VERSION,
         last_seen_at: now,
       },
       { onConflict: 'expo_push_token' },
