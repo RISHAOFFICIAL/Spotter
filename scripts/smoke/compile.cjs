@@ -14,6 +14,11 @@ const OUT = path.join(ROOT, 'scripts', 'smoke', '.compiled');
 
 const FILES = [
   'src/lib/mock.ts',
+  // src/lib/appVersion.ts is a REAL app module (analytics.ts and
+  // pushRegistration.ts both import the constant it defines, and supabase.ts
+  // imports analytics) — it must be compiled here or every compiled consumer
+  // fails to resolve './appVersion'. That is why this list is 19, not 18.
+  'src/lib/appVersion.ts',
   'src/lib/analytics.ts',
   'src/lib/weeklyResults.ts',
   'src/lib/invites.ts',

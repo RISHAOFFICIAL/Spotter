@@ -28,6 +28,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { getStoredSession, isDevMode, supabase } from './supabase';
+// `app_version` must be the number this build actually shipped as — NOT a
+// literal here. A hardcoded one drifted to 1.1.0 while app.json said 1.0.0, so
+// the 1.0.0 launch build would have mislabelled every row it wrote. Single
+// definition + derivation from the declared version: src/lib/appVersion.ts.
+import { APP_VERSION } from './appVersion';
 
 /** Event families. The four *_WIRED families emit today; the rest are typed
  * now so Builds #2–#4 wire call sites without touching this file's API. */
@@ -99,7 +104,6 @@ export interface TrackedEvent {
 const INSTALL_KEY = 'spotter.install:v1';
 const FIRST_OPEN_KEY = 'spotter.first_open:v1';
 const SESSION_KEY = 'spotter.session_id:v1';
-const APP_VERSION = '1.1.0';
 
 const BUFFER_CAP = 200;
 const devBuffer: TrackedEvent[] = [];

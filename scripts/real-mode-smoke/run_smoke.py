@@ -282,6 +282,44 @@ try:
             f"parsed {copy_parsed} result lines (exit={copy_guard.returncode}) — the guard lost checks")
 except Exception as e:  # node missing / script missing / timeout — never a silent skip
     rec("0e-push-copy", "push-copy guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
+# ---------------- FLOW 0f: APP-VERSION STAMP GUARD (offline) ----------------
+# The launch build would have mislabelled its own data: app.json declares 1.0.0,
+# while the code stamped a hardcoded '1.1.0' onto analytics_events.app_version
+# (analytics.ts:102 → :185) and push_devices.app_version (pushRegistration.ts:77
+# and :94). Every event and push row of the 1.0.0 build would read 1.1.0, so
+# version-segmented retention data is unattributable and a real future 1.1.0 is
+# indistinguishable from launch. scripts/smoke/app-version-guard.cjs sweeps src/
+# for a version-shaped literal, then runs the REAL compiled analytics and
+# pushRegistration modules to read the app_version actually reaching an emitted
+# event row and a dev-mock push_devices row, requires both to EQUAL app.json's
+# declared version, proves the value follows the embedded config (sentinel
+# propagation — a baked literal cannot pass), and negative-controls the same
+# analysers against the pre-fix pattern. It removes the EXPO_PUBLIC_* vars and
+# asserts DEV MOCK before driving anything, so a guard run can never write to the
+# live project. Same gate as flows 0/0b/0c/0d/0e: missing/shrunken = FAIL, and
+# any FAIL exits non-zero.
+APP_VERSION_GUARD_SCRIPT = os.path.join(REPO_ROOT, "scripts", "smoke", "app-version-guard.cjs")
+APP_VERSION_GUARD_CHECKS = 19  # every PASS/FAIL line it prints (18 checks + 1 self-check); a shrink is itself a failure
+print(f"[guard] node {APP_VERSION_GUARD_SCRIPT} (cwd={REPO_ROOT})", flush=True)
+try:
+    appver_guard = subprocess.run(["node", APP_VERSION_GUARD_SCRIPT], cwd=REPO_ROOT,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, timeout=300)
+    appver_parsed = 0
+    for avline in (appver_guard.stdout or "").splitlines():
+        avm = re.match(r"^(PASS|FAIL)\s+(.*?)(?:\s+::\s+(.*))?$", avline.rstrip())
+        if not avm:
+            continue
+        appver_parsed += 1
+        rec("0f-app-version", avm.group(2).strip(), avm.group(1), (avm.group(3) or "").strip())
+    if appver_parsed == 0:
+        rec("0f-app-version", "app-version guard emitted PASS/FAIL lines", FAIL,
+            f"parsed 0 result lines, exit={appver_guard.returncode}, stderr={short((appver_guard.stderr or '').strip())}")
+    elif appver_parsed != APP_VERSION_GUARD_CHECKS:
+        rec("0f-app-version", f"app-version guard reported all {APP_VERSION_GUARD_CHECKS} checks", FAIL,
+            f"parsed {appver_parsed} result lines (exit={appver_guard.returncode}) — the guard lost checks")
+except Exception as e:  # node missing / script missing / timeout — never a silent skip
+    rec("0f-app-version", "app-version guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
 # ---------------- FLOW 0d: FIRST-RUN AUTH GATE GUARD (offline) ----------------
 # Cold-reviewer audit (2026-09-23, /home/team/shared/first-run-reviewer-audit-2026-09-23.md):
 # _layout.tsx's conditional <Stack.Screen> list is an ORDER choice, not a gate —
