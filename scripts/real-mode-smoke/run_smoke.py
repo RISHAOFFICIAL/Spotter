@@ -402,16 +402,19 @@ except Exception as e:  # node missing / script missing / timeout — never a si
 # reveal control and no confirmation let a first-run typo create an account
 # nobody can sign back into — on the one screen the north-star metric needs
 # completed. scripts/smoke/password-ux-guard.cjs renders the REAL
-# WelcomeStep (leaf deps stubbed) and asserts BEHAVIOUR: the reveal control
-# exists and really flips secureTextEntry, create mode has a confirm field and
-# sign-in mode does not, a mismatch renders a danger-coloured message AND never
-# reaches authenticate() (counting spy + counting Supabase client), a match
-# calls it exactly once. It also freezes the landing-state text against master,
-# so the App Store frame cut from this screen cannot go stale. Its own negative
-# control (master's component) fails 18 of the 23 checks.
+# WelcomeStep AND the REAL EnterCodeScreen (leaf deps stubbed — the second
+# screen carried the same defect and is the pre-auth "Join & create account"
+# path an invited reviewer walks) and asserts BEHAVIOUR on both: the reveal
+# control exists and really flips secureTextEntry, create mode has a confirm
+# field and sign-in mode does not, a mismatch renders a danger-coloured message
+# AND never reaches authenticate() (counting spy + counting Supabase client),
+# a match calls it exactly once and advances (onDone / one accept_invite). It
+# also freezes WelcomeStep's landing-state text against master, so the App Store
+# frame cut from that screen cannot go stale. Its own negative control (BOTH
+# pre-fix components, via SPOTTER_GUARD_ROOT) fails 32 of the 42 checks.
 # Same gate as flows 0/0b/0c/0d/0e/0f: missing/shrunken = FAIL, any FAIL exits non-zero.
 PASSWORD_UX_GUARD_SCRIPT = os.path.join(REPO_ROOT, "scripts", "smoke", "password-ux-guard.cjs")
-PASSWORD_UX_GUARD_CHECKS = 23  # every PASS/FAIL line it prints; a shrink is itself a failure
+PASSWORD_UX_GUARD_CHECKS = 42  # every PASS/FAIL line it prints; a shrink is itself a failure
 print(f"[guard] node {PASSWORD_UX_GUARD_SCRIPT} (cwd={REPO_ROOT})", flush=True)
 try:
     pux_guard = subprocess.run(["node", PASSWORD_UX_GUARD_SCRIPT], cwd=REPO_ROOT,

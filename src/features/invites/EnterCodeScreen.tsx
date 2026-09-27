@@ -15,6 +15,21 @@
  * "Just look around" → continues SOLO (the invite stays pending; never a dead
  * end). Pending-until-accepted truth lives in the invite sheet ("Link sent —
  * waiting") and here.
+ *
+ * The inline create-account form carries a create-vs-sign-in MODE, exactly like
+ * WelcomeStep's (owner report 2026-09-26; PR #42 fixed the first screen and this
+ * is the second screen that had the same defect — the one an invited reviewer
+ * hits, and the one App Store frame 07 depicts):
+ *  - a masked field is hard to check, so every password field gets a 48pt
+ *    reveal/hide control that really flips that field's secure state;
+ *  - CREATE mode (the default on this screen: an invited newcomer without an
+ *    account is making one) adds a "Confirm password" field whose mismatch
+ *    BLOCKS the submit — it never reaches authenticate() — and is rendered by
+ *    the error line already on this stage, never silently discarded;
+ *  - SIGN-IN mode is for the invitee who already has an account: one password
+ *    field, no confirmation.
+ * The glyph vocabulary and accessibility labels are shared with WelcomeStep on
+ * purpose; the two forms must read as one product.
  */
 import React, { useRef, useState } from 'react';
 import {
@@ -27,6 +42,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 // strict-api types break KAV's JSX signature (upstream RN 0.86 preview)
 const KeyboardAvoidingView = KAV as unknown as React.ComponentType<{
@@ -35,7 +51,7 @@ const KeyboardAvoidingView = KAV as unknown as React.ComponentType<{
 }>;
 
 import { AppButton, TextButton } from '@/components/AppButton';
-import { colors, radius, spacing } from '@/theme/tokens';
+import { colors, icons, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
 import { useAuth } from '@/features/auth/AuthProvider';
 import {
@@ -47,6 +63,45 @@ import {
 } from '@/lib/invites';
 
 type Stage = 'enter' | 'found';
+type AuthMode = 'create' | 'sign-in';
+
+/** Shown when the two create-mode passwords disagree (same string as WelcomeStep). */
+const PASSWORD_MISMATCH = "Those passwords don't match — try again.";
+
+/**
+ * Reveal/hide control for one masked field. 48×48 (≥44pt) hit target, and the
+ * accessibility label follows the state so a screen reader announces the action
+ * the tap will perform. `revealed` is the parent's state, so the glyph and the
+ * field's secureTextEntry can never disagree. Byte-identical pattern to
+ * WelcomeStep's control (PR #42) — the two forms must read as one product.
+ */
+function RevealToggle({
+  revealed,
+  onToggle,
+  showLabel,
+  hideLabel,
+}: {
+  revealed: boolean;
+  onToggle: () => void;
+  showLabel: string;
+  hideLabel: string;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={revealed ? hideLabel : showLabel}
+      onPress={onToggle}
+      hitSlop={8}
+      style={styles.revealBtn}
+    >
+      <Ionicons
+        name={revealed ? 'eye-off-outline' : 'eye-outline'}
+        size={icons.lengths.badge}
+        color={colors.text.muted.hex}
+      />
+    </Pressable>
+  );
+}
 
 export function EnterCodeScreen() {
   const router = useRouter();
@@ -58,7 +113,19 @@ export function EnterCodeScreen() {
   const [error, setError] = useState<string | null>(null);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  // CREATE is the default: the newcomer on this stage has no account yet.
+  const [authMode, setAuthMode] = useState<AuthMode>('create');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [revealPassword, setRevealPassword] = useState(false);
+  const [revealConfirm, setRevealConfirm] = useState(false);
   const lastCode = useRef('');
+  const isCreate = authMode === 'create';
+
+  // Switching mode must not carry the other mode's message into the new form.
+  const switchMode = (next: AuthMode) => {
+    setAuthMode(next);
+    setError(null);
+  };
 
   const resolve = async (value: string) => {
     const normalized = normalizeInviteCode(value);
@@ -112,12 +179,25 @@ export function EnterCodeScreen() {
   // Pending auth handled here (inline single-path auth, same as Welcome):
   // if the invitee has no account yet they create one, THEN accept.
   const ensureAccountThenAccept = async () => {
+    setError(null);
+    // CREATE mode only, and it BLOCKS (the same rule WelcomeStep learned from
+    // the 2026-09-26 owner report): a mismatch never reaches authenticate() —
+    // it is rendered by the danger-coloured error line on this stage, never
+    // silently discarded. A first-run typo can therefore not quietly create an
+    // account nobody can sign back into.
+    if (isCreate && confirmPassword !== authPassword) {
+      setError(PASSWORD_MISMATCH);
+      return;
+    }
     if (!authEmail || !authPassword) {
-      setError('Enter your email and password to create your account.');
+      setError(
+        isCreate
+          ? 'Enter your email and password to create your account.'
+          : 'Enter the email and password for your account.',
+      );
       return;
     }
     setBusy(true);
-    setError(null);
     const { authenticate } = await import('@/lib/supabase');
     const authRes = await authenticate(authEmail, authPassword);
     if (!authRes.ok) {
@@ -198,34 +278,95 @@ export function EnterCodeScreen() {
             {!session ? (
               // No account yet: inline create-then-accept (same auth path as Welcome).
               <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-                <TextInput
-                  value={authEmail}
-                  onChangeText={setAuthEmail}
-                  placeholder="Email"
-                  placeholderTextColor={colors.text.muted.hex}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoComplete="email"
-                  textContentType="emailAddress"
-                  style={styles.input}
-                  accessibilityLabel="Email"
-                />
-                <TextInput
-                  value={authPassword}
-                  onChangeText={setAuthPassword}
-                  placeholder="Password (6+ characters)"
-                  placeholderTextColor={colors.text.muted.hex}
-                  secureTextEntry
-                  textContentType="password"
-                  style={styles.input}
-                  accessibilityLabel="Password"
-                />
-                <AppButton
-                  label={info.hasGroup ? 'Join & create account' : 'Start a group & create account'}
-                  onPress={() => void ensureAccountThenAccept()}
-                  disabled={!authEmail || !authPassword || busy}
-                  loading={busy}
-                />
+                {/* One row stack with a real gap. This screen's inputs used to
+                    run flush together (every row had margin 0); the same 8pt
+                    rhythm WelcomeStep's form uses is the fix, and it is what
+                    App Store frame 07 already draws. */}
+                <View style={styles.authForm}>
+                  <TextInput
+                    value={authEmail}
+                    onChangeText={setAuthEmail}
+                    placeholder="Email"
+                    placeholderTextColor={colors.text.muted.hex}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    autoComplete="email"
+                    textContentType="emailAddress"
+                    style={styles.input}
+                    accessibilityLabel="Email"
+                  />
+                  {/* textContentType stays "password" in both modes, matching
+                      WelcomeStep: switching it to "newPassword" would hand iOS's
+                      strong-password AutoFill this form — a visible behaviour
+                      change nobody asked for. */}
+                  <View style={styles.field}>
+                    <TextInput
+                      value={authPassword}
+                      onChangeText={setAuthPassword}
+                      placeholder="Password (6+ characters)"
+                      placeholderTextColor={colors.text.muted.hex}
+                      secureTextEntry={!revealPassword}
+                      textContentType="password"
+                      style={[styles.input, styles.inputWithReveal]}
+                      accessibilityLabel="Password"
+                    />
+                    <RevealToggle
+                      revealed={revealPassword}
+                      onToggle={() => setRevealPassword((v) => !v)}
+                      showLabel="Show password"
+                      hideLabel="Hide password"
+                    />
+                  </View>
+                  {isCreate ? (
+                    <View style={styles.field}>
+                      <TextInput
+                        value={confirmPassword}
+                        onChangeText={setConfirmPassword}
+                        placeholder="Confirm password"
+                        placeholderTextColor={colors.text.muted.hex}
+                        secureTextEntry={!revealConfirm}
+                        autoCapitalize="none"
+                        style={[styles.input, styles.inputWithReveal]}
+                        accessibilityLabel="Confirm password"
+                      />
+                      <RevealToggle
+                        revealed={revealConfirm}
+                        onToggle={() => setRevealConfirm((v) => !v)}
+                        showLabel="Show confirm password"
+                        hideLabel="Hide confirm password"
+                      />
+                    </View>
+                  ) : null}
+                  {/* Mode switch, same muted-caption row and same two strings as
+                      WelcomeStep (PR #42). Both modes share the one submit path —
+                      authenticate() signs in or creates. */}
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      isCreate ? 'Already have an account? Sign in' : 'New here? Create an account'
+                    }
+                    onPress={() => switchMode(isCreate ? 'sign-in' : 'create')}
+                    style={styles.modeRow}
+                  >
+                    <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+                      {isCreate ? 'Already have an account? Sign in' : 'New here? Create an account'}
+                    </Text>
+                  </Pressable>
+                  <AppButton
+                    label={
+                      isCreate
+                        ? info.hasGroup
+                          ? 'Join & create account'
+                          : 'Start a group & create account'
+                        : info.hasGroup
+                          ? 'Sign in & join'
+                          : 'Sign in & start a group'
+                    }
+                    onPress={() => void ensureAccountThenAccept()}
+                    disabled={!authEmail || !authPassword || busy}
+                    loading={busy}
+                  />
+                </View>
               </KeyboardAvoidingView>
             ) : (
               <AppButton
@@ -265,6 +406,31 @@ const styles = StyleSheet.create({
     color: colors.text.primary.hex,
     fontSize: 16,
     textAlign: 'center',
+  },
+  // The auth row stack: a real 8pt rhythm between rows, the same rhythm
+  // WelcomeStep's form uses (this screen's rows had no margin at all).
+  authForm: { gap: spacing.sm },
+  // Password rows: `styles.input` stays untouched (height, radius, colour,
+  // centred text); the wrapper only gives the 48pt reveal control something to
+  // sit on, and `inputWithReveal` reserves its width. Unlike WelcomeStep — whose
+  // input text is left-aligned, so a right pad alone cannot shift it — this
+  // screen centres its text, so BOTH sides are padded and the placeholder stays
+  // optically centred with the glyph sitting over the right pad.
+  field: { position: 'relative', justifyContent: 'center' },
+  inputWithReveal: { paddingLeft: 48, paddingRight: 48 },
+  revealBtn: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    width: 48,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modeRow: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   privacyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
   privacy: { color: colors.text.muted.hex, maxWidth: '85%', textAlign: 'left' },
