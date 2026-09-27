@@ -66,12 +66,15 @@ step() {
   # missing gate is itself a FAIL (never a silent skip).
   local pass=0
   case "$label" in
-    *tsc*|*compile*)        [ "$rc" -eq 0 ] && pass=1 ;;
+    # Specific guard patterns FIRST: the generic `*compile*` branch below would
+    # otherwise swallow `compile-freshness-guard` and accept a bare exit 0.
     *stack-children*)       printf '%s' "$sum" | grep -q '19 PASS / 0 FAIL' && pass=1 ;;
     *promise-rollover*)     printf '%s' "$sum" | grep -q '21 PASS / 0 FAIL' && pass=1 ;;
-    *bottom-bar*)           printf '%s' "$sum" | grep -q '33 PASS / 0 FAIL' && pass=1 ;;
+    *bottom-bar*)           printf '%s' "$sum" | grep -q '48 PASS / 0 FAIL' && pass=1 ;;
     *onboarding-order*)     printf '%s' "$sum" | grep -q '15 PASS / 0 FAIL' && pass=1 ;;
+    *compile-freshness*)    printf '%s' "$sum" | grep -q '15 PASS / 0 FAIL' && pass=1 ;;
     *smoke-test*)           printf '%s' "$sum" | grep -q 'ALL 26 STEPS PASSED' && pass=1 ;;
+    *tsc*|*compile*)        [ "$rc" -eq 0 ] && pass=1 ;;
     *)                      [ "$rc" -eq 0 ] && pass=1 ;;
   esac
   if [ "$pass" -eq 1 ]; then
@@ -91,10 +94,15 @@ step() {
 
 # ---- offline chain -----------------------------------------------------------
 step "tsc --noEmit"           "exit 0"              npx tsc --noEmit
-step "compile.cjs"            "exit 0 (18 modules)" node scripts/smoke/compile.cjs
+step "compile.cjs"            "exit 0 (19 modules)" node scripts/smoke/compile.cjs
 step "stack-children-guard"   "19 PASS / 0 FAIL"    node scripts/smoke/stack-children-guard.cjs
 step "promise-rollover-guard" "21 PASS / 0 FAIL"    node scripts/smoke/promise-rollover-guard.cjs
-step "bottom-bar-guard"       "33 PASS / 0 FAIL"    node scripts/smoke/bottom-bar-guard.cjs
+step "bottom-bar-guard"       "48 PASS / 0 FAIL"    node scripts/smoke/bottom-bar-guard.cjs
+# The harness's own freshness: the guards assert against scripts/smoke/.compiled/,
+# a gitignored directory that outlives commits. This guard proves the compiler's
+# clean step still runs (and that its post-condition rejects an orphan), with its
+# own pre-#48 negative control. Landed with the pre-build-30 gate run.
+step "compile-freshness-guard" "15 PASS / 0 FAIL"   node scripts/smoke/compile-freshness-guard.cjs
 if [ -f scripts/smoke/onboarding-order-guard.cjs ]; then
   step "onboarding-order-guard" "15 PASS / 0 FAIL" node scripts/smoke/onboarding-order-guard.cjs
 else
