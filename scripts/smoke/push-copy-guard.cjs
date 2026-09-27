@@ -57,6 +57,29 @@ const COMPILE = path.join(ROOT, 'scripts', 'smoke', 'compile.cjs');
 const COMPILED = path.join(ROOT, 'scripts', 'smoke', '.compiled');
 const FIXED_CHECKS = 18;
 
+// --------------------------------------------------------------------------
+// ENV SANITISATION — must stay ABOVE every require of a compiled app module.
+// WHY: this guard's verdict has to be a function of the TREE and nothing else.
+// src/lib/supabase.ts decides DEV MOCK vs REAL at module load from these two
+// vars (supabase.ts:25-26) and builds the real client at :72-74; the harness
+// resolves '@supabase/supabase-js' to scripts/smoke/supabase-js.js, whose
+// createClient does nothing but THROW. So a shell that happens to have them
+// exported makes the compiled notificationPrefs require below throw on a
+// perfectly good tree, which this guard scores as 14 PASS / 5 FAIL (every
+// "prefs:" check dies with the harness error). run_smoke.py spawns every guard
+// with no `env=`, so guards inherit the caller's shell — that is how a leaked
+// var silently changes the verdict without anyone touching the tree.
+// Deleting them here makes the verdict env-independent: same tree → same counts
+// whatever the shell. The deletion happens BEFORE the compile step below is
+// spawned, and spawnSync passes no `env`, so that child inherits this already
+// sanitised environment as well. `grep -rn "process\.env" src/` is the whole
+// list of app reads of these — these two are all of it (both in supabase.ts).
+// Precedent: app-version-guard.cjs:76-84, documented at run_smoke.py:297.
+// Do NOT remove this block in a cleanup pass — it is load-bearing.
+// --------------------------------------------------------------------------
+delete process.env.EXPO_PUBLIC_SUPABASE_URL;
+delete process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
 // ---------------------------------------------------------------------------
 // the claim set. ONE analyser, used by the shipped tree AND the negative control.
 // Each entry is a user-facing promise that the backend cannot keep today.

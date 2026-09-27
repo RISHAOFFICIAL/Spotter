@@ -53,6 +53,30 @@ const ROLLOVER_SRC = path.join(ROOT, 'src', 'lib', 'promiseRollover.ts');
 const COMPILED = path.join(ROOT, 'scripts', 'smoke', '.compiled');
 
 // --------------------------------------------------------------------------
+// ENV SANITISATION — must stay ABOVE every require of a compiled app module.
+// WHY: this guard's verdict has to be a function of the TREE and nothing else.
+// src/lib/supabase.ts decides DEV MOCK vs REAL at module load from these two
+// vars (supabase.ts:25-26) and builds the real client at :72-74; the harness
+// resolves '@supabase/supabase-js' to scripts/smoke/supabase-js.js, whose
+// createClient does nothing but THROW. So a shell that happens to have them
+// exported makes the module load below fail on a perfectly good tree — and this
+// guard does not merely report that as one red line, it ABORTS: `if (!model)
+// return` just below section 2 skips every scenario, so the whole suite collapses
+// to 1 PASS / 1 FAIL. run_smoke.py spawns every guard with no `env=`, so guards
+// inherit the caller's shell, which is exactly how a leaked var changes the
+// verdict without anyone touching the tree.
+// Deleting them here makes the verdict env-independent: same tree → same counts
+// whatever the shell. The deletion happens BEFORE the compile step below is
+// spawned, and spawnSync passes no `env`, so that child inherits this already
+// sanitised environment as well. `grep -rn "process\.env" src/` is the whole
+// list of app reads of these — these two are all of it (both in supabase.ts).
+// Precedent: app-version-guard.cjs:76-84, documented at run_smoke.py:297.
+// Do NOT remove this block in a cleanup pass — it is load-bearing.
+// --------------------------------------------------------------------------
+delete process.env.EXPO_PUBLIC_SUPABASE_URL;
+delete process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+// --------------------------------------------------------------------------
 // tiny reporter (one PASS/FAIL line per check — run_smoke.py counts them)
 // --------------------------------------------------------------------------
 let passes = 0;
