@@ -924,6 +924,34 @@ create index if not exists analytics_events_user_idx
 create policy "analytics_events_insert_own" on public.analytics_events
   for insert to authenticated
   with check (user_id is null or auth.uid() = user_id);
+-- Anonymous (pre-signup) INSERT — added 2026-09-27, migration
+-- supabase/migrations/2026-09-27-analytics-events-anon-insert.sql. The app's
+-- emitter fires `app_opened` at AuthProvider mount, before any session is
+-- restored, and the invite-screen pair_action verbs fire pre-auth; without this
+-- policy RLS default-DENIED them, so the first-open event — the north-star
+-- metric's denominator — never reached the database and there was no install
+-- record to reconstruct it from. Deliberately narrow: an anonymous row must have
+-- user_id IS NULL (so it can never be attributed to, or impersonate, a real
+-- user) AND name one of the events the client emits before sign-in (app_opened,
+-- or pair_action with a pre-auth verb). Every other event family stays refused
+-- to anon, so activation inputs (signup_completed, workout_logged,
+-- invite_accepted) cannot be forged from an anonymous client. NOT airtight: the
+-- anon key ships in the client, so anyone holding it can spam rows under those
+-- names — bounded to dashboard noise, since anon still cannot read the table
+-- (no SELECT policy, and INSERT ... RETURNING therefore also fails). Same
+-- posture as app_diagnostics below, and narrower.
+create policy "analytics_events_insert_anon_preauth" on public.analytics_events
+  for insert to anon
+  with check (
+    user_id is null
+    and (
+      event_name = 'app_opened'
+      or (
+        event_name = 'pair_action'
+        and action in ('invite_created', 'share_tapped', 'code_copied')
+      )
+    )
+  );
 
 -- app_diagnostics: first-party crash breadcrumb (build-18 diagnostics). One row
 -- per reported JS error/unhandled rejection: message + stack + app version +
