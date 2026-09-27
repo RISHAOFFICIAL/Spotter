@@ -398,20 +398,28 @@ try:
             f"parsed {onb_parsed} result lines (exit={onb_guard.returncode}) — the guard lost checks")
 except Exception as e:  # node missing / script missing / timeout — never a silent skip
     rec("0d-onboarding-order", "onboarding-order guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
-# 0g: the signup password UX (owner report 2026-09-26). A masked field with no
-# reveal control and no confirmation let a first-run typo create an account
-# nobody can sign back into — on the one screen the north-star metric needs
-# completed. scripts/smoke/password-ux-guard.cjs renders the REAL
-# WelcomeStep (leaf deps stubbed) and asserts BEHAVIOUR: the reveal control
-# exists and really flips secureTextEntry, create mode has a confirm field and
-# sign-in mode does not, a mismatch renders a danger-coloured message AND never
-# reaches authenticate() (counting spy + counting Supabase client), a match
-# calls it exactly once. It also freezes the landing-state text against master,
-# so the App Store frame cut from this screen cannot go stale. Its own negative
-# control (master's component) fails 18 of the 23 checks.
+# 0g: the signup password UX on BOTH signup screens, at the owner's final shape
+# (2026-09-27). A masked field with no reveal control, no visible requirement and
+# no entry-time validation let a first-run typo create an account nobody can sign
+# back into — on the one screen the north-star metric needs completed.
+# scripts/smoke/password-ux-guard.cjs renders the REAL WelcomeStep AND the REAL
+# EnterCodeScreen (leaf deps stubbed — the second screen carried the same defect
+# and is the pre-auth "Join & create account" path an invited reviewer walks) and
+# asserts the owner's five points on both: NO confirm field anywhere (rendered,
+# named, or swept for repo-wide), exactly ONE password entry control, a 48pt
+# toggle whose VoiceOver label follows the state ("Show password"/"Hide
+# password"), the requirement copy rendered AND derived from PASSWORD_MIN_LENGTH
+# (a fixture with the rule swapped to 9 proves the copy, the inline line and the
+# block all move with it), entry-time validation in the danger colour, and a
+# too-short submit that renders its message and never reaches authenticate()
+# (counting spy + counting Supabase client) on either screen. It also freezes
+# WelcomeStep's landing-state text against master, so the App Store frame cut
+# from that screen cannot go stale. Its own negative control (the pre-fix
+# components that carry the confirm field, via SPOTTER_GUARD_ROOT) fails 29 of
+# the 42 checks and exits 1.
 # Same gate as flows 0/0b/0c/0d/0e/0f: missing/shrunken = FAIL, any FAIL exits non-zero.
 PASSWORD_UX_GUARD_SCRIPT = os.path.join(REPO_ROOT, "scripts", "smoke", "password-ux-guard.cjs")
-PASSWORD_UX_GUARD_CHECKS = 23  # every PASS/FAIL line it prints; a shrink is itself a failure
+PASSWORD_UX_GUARD_CHECKS = 42  # every PASS/FAIL line it prints; a shrink is itself a failure
 print(f"[guard] node {PASSWORD_UX_GUARD_SCRIPT} (cwd={REPO_ROOT})", flush=True)
 try:
     pux_guard = subprocess.run(["node", PASSWORD_UX_GUARD_SCRIPT], cwd=REPO_ROOT,

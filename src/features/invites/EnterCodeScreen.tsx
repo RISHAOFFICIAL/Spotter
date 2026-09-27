@@ -15,6 +15,23 @@
  * "Just look around" → continues SOLO (the invite stays pending; never a dead
  * end). Pending-until-accepted truth lives in the invite sheet ("Link sent —
  * waiting") and here.
+ *
+ * The inline create-account form carries a create-vs-sign-in MODE, exactly like
+ * WelcomeStep's, and ONE shared password row
+ * (src/features/auth/PasswordField.tsx) so the two forms read as one product
+ * (owner's final shape, 2026-09-27):
+ *  - one password field — never a confirm field on either screen;
+ *  - a 48pt (>=44pt) show/hide toggle whose VoiceOver label follows the state
+ *    ("Show password" / "Hide password") and really flips the field's secure
+ *    state;
+ *  - the requirement ("At least 6 characters.") visible at the point of entry,
+ *    derived from PASSWORD_MIN_LENGTH — the rule src/lib/supabase.ts enforces
+ *    and the rule the live auth backend enforces;
+ *  - entry-time validation rendered under the field in the danger colour as
+ *    soon as the typed password is short of the rule;
+ *  - submitting a password short of the rule is BLOCKED before authenticate() —
+ *    it never reaches authenticate(), and the message is rendered, never
+ *    silently discarded.
  */
 import React, { useRef, useState } from 'react';
 import {
@@ -27,6 +44,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 // strict-api types break KAV's JSX signature (upstream RN 0.86 preview)
 const KeyboardAvoidingView = KAV as unknown as React.ComponentType<{
@@ -35,7 +53,9 @@ const KeyboardAvoidingView = KAV as unknown as React.ComponentType<{
 }>;
 
 import { AppButton, TextButton } from '@/components/AppButton';
-import { colors, radius, spacing } from '@/theme/tokens';
+import { PASSWORD_MIN_LENGTH, passwordTooShortMessage } from '@/lib/supabase';
+import { PasswordField } from '@/features/auth/PasswordField';
+import { colors, icons, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
 import { useAuth } from '@/features/auth/AuthProvider';
 import {
@@ -47,6 +67,7 @@ import {
 } from '@/lib/invites';
 
 type Stage = 'enter' | 'found';
+type AuthMode = 'create' | 'sign-in';
 
 export function EnterCodeScreen() {
   const router = useRouter();
@@ -58,7 +79,16 @@ export function EnterCodeScreen() {
   const [error, setError] = useState<string | null>(null);
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  // CREATE is the default: the newcomer on this stage has no account yet.
+  const [authMode, setAuthMode] = useState<AuthMode>('create');
   const lastCode = useRef('');
+  const isCreate = authMode === 'create';
+
+  // Switching mode must not carry the other mode's message into the new form.
+  const switchMode = (next: AuthMode) => {
+    setAuthMode(next);
+    setError(null);
+  };
 
   const resolve = async (value: string) => {
     const normalized = normalizeInviteCode(value);
@@ -112,12 +142,26 @@ export function EnterCodeScreen() {
   // Pending auth handled here (inline single-path auth, same as Welcome):
   // if the invitee has no account yet they create one, THEN accept.
   const ensureAccountThenAccept = async () => {
+    setError(null);
     if (!authEmail || !authPassword) {
-      setError('Enter your email and password to create your account.');
+      setError(
+        isCreate
+          ? 'Enter your email and password to create your account.'
+          : 'Enter the email and password for your account.',
+      );
+      return;
+    }
+    // The one gate on this screen, and it is the rule the auth module and the
+    // live backend both enforce (PASSWORD_MIN_LENGTH): a short password never
+    // reaches authenticate(), and the message is rendered by the danger-coloured
+    // error line already on this stage — never silently discarded. A first-run
+    // typo can therefore not quietly create an account nobody can sign back
+    // into.
+    if (authPassword.length < PASSWORD_MIN_LENGTH) {
+      setError(passwordTooShortMessage());
       return;
     }
     setBusy(true);
-    setError(null);
     const { authenticate } = await import('@/lib/supabase');
     const authRes = await authenticate(authEmail, authPassword);
     if (!authRes.ok) {
@@ -198,34 +242,60 @@ export function EnterCodeScreen() {
             {!session ? (
               // No account yet: inline create-then-accept (same auth path as Welcome).
               <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-                <TextInput
-                  value={authEmail}
-                  onChangeText={setAuthEmail}
-                  placeholder="Email"
-                  placeholderTextColor={colors.text.muted.hex}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoComplete="email"
-                  textContentType="emailAddress"
-                  style={styles.input}
-                  accessibilityLabel="Email"
-                />
-                <TextInput
-                  value={authPassword}
-                  onChangeText={setAuthPassword}
-                  placeholder="Password (6+ characters)"
-                  placeholderTextColor={colors.text.muted.hex}
-                  secureTextEntry
-                  textContentType="password"
-                  style={styles.input}
-                  accessibilityLabel="Password"
-                />
-                <AppButton
-                  label={info.hasGroup ? 'Join & create account' : 'Start a group & create account'}
-                  onPress={() => void ensureAccountThenAccept()}
-                  disabled={!authEmail || !authPassword || busy}
-                  loading={busy}
-                />
+                {/* One row stack with a real gap. This screen's inputs used to
+                    run flush together (every row had margin 0); the same 8pt
+                    rhythm WelcomeStep's form uses is the fix, and it is what
+                    App Store frame 07 already draws. */}
+                <View style={styles.authForm}>
+                  <TextInput
+                    value={authEmail}
+                    onChangeText={setAuthEmail}
+                    placeholder="Email"
+                    placeholderTextColor={colors.text.muted.hex}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    autoComplete="email"
+                    textContentType="emailAddress"
+                    style={styles.input}
+                    accessibilityLabel="Email"
+                  />
+                  {/* ONE password row (owner's final shape), the same shared
+                      component WelcomeStep renders — no confirm field, a
+                      show/hide toggle whose VoiceOver label follows the state,
+                      the requirement visible, entry-time validation rendered.
+                      `centered` keeps this screen's centred input text; the
+                      shared component's styles are the same on both screens. */}
+                  <PasswordField value={authPassword} onChangeText={setAuthPassword} centered />
+                  {/* Mode switch, same muted-caption row and same two strings as
+                      WelcomeStep (PR #42). Both modes share the one submit path —
+                      authenticate() signs in or creates. */}
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      isCreate ? 'Already have an account? Sign in' : 'New here? Create an account'
+                    }
+                    onPress={() => switchMode(isCreate ? 'sign-in' : 'create')}
+                    style={styles.modeRow}
+                  >
+                    <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+                      {isCreate ? 'Already have an account? Sign in' : 'New here? Create an account'}
+                    </Text>
+                  </Pressable>
+                  <AppButton
+                    label={
+                      isCreate
+                        ? info.hasGroup
+                          ? 'Join & create account'
+                          : 'Start a group & create account'
+                        : info.hasGroup
+                          ? 'Sign in & join'
+                          : 'Sign in & start a group'
+                    }
+                    onPress={() => void ensureAccountThenAccept()}
+                    disabled={!authEmail || !authPassword || busy}
+                    loading={busy}
+                  />
+                </View>
               </KeyboardAvoidingView>
             ) : (
               <AppButton
@@ -265,6 +335,17 @@ const styles = StyleSheet.create({
     color: colors.text.primary.hex,
     fontSize: 16,
     textAlign: 'center',
+  },
+  // The auth row stack: a real 8pt rhythm between rows, the same rhythm
+  // WelcomeStep's form uses (this screen's rows had no margin at all).
+  authForm: { gap: spacing.sm },
+  // Password rows live in src/features/auth/PasswordField.tsx now, styles and
+  // all (including the centred-text variant), so this screen and WelcomeStep
+  // cannot drift apart.
+  modeRow: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   privacyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
   privacy: { color: colors.text.muted.hex, maxWidth: '85%', textAlign: 'left' },
