@@ -111,9 +111,11 @@ function PreviewFrame() {
             <View style={styles.previewChip} pointerEvents="none">
               <Text style={[textStyles.label.style, styles.previewChipText]}>PREVIEW</Text>
             </View>
-            <View style={[styles.liveBadge, styles.mockLiveBadge]} pointerEvents="none">
-              <Ionicons name="radio" size={9} color={colors.brand.primary.hex} />
-              <Text style={[textStyles.label.style, styles.liveBadgeText]}>Live</Text>
+            <View style={[styles.liveBadge, styles.mockLiveBadge, styles.mockLiveBadgeFill]} pointerEvents="none">
+              {/* Mock "Live" badge on the LIGHT preview card — volt is a fill,
+                  never an ink: volt pill + text.onVolt ink (14.2:1). */}
+              <Ionicons name="radio" size={9} color={colors.text.onVolt.hex} />
+              <Text style={[textStyles.label.style, styles.liveBadgeText, { color: colors.text.onVolt.hex }]}>Live</Text>
             </View>
           </View>
           <View style={styles.mockBody}>
@@ -456,7 +458,8 @@ export function PracticeCamStep({ onNext, onSkip }: { onNext: () => void; onSkip
               </Pressable>
             </View>
             <View style={styles.honestyRow}>
-              <Text style={{ fontSize: icons.lengths.badge, color: colors.status.success.hex }}>✓</Text>
+              {/* volt is a fill, never an ink — a ✓ as ink measured 1.19:1. */}
+              <Text style={{ fontSize: icons.lengths.badge, color: colors.text.muted.hex }}>✓</Text>
               <Text style={[textStyles.caption.style, styles.honestyText]}>Nothing gets saved or posted.</Text>
             </View>
             <Text style={[textStyles.caption.style, styles.ringTruth]}>
@@ -565,6 +568,12 @@ const styles = StyleSheet.create({
   },
   previewChipText: { color: colors.text.muted.hex, fontSize: 9, lineHeight: 11 },
   mockLiveBadge: { top: 6, right: 6 },
+  /** The mock badge is the LIGHT one: styles.liveBadge is SHARED by the light
+   * preview card (line ~114) and the camera chrome (line ~320, a DARK surface
+   * where volt ink measures 13.8:1 and is correct). So the volt FILL lives here,
+   * in the mock-only override, and this style is listed last in the array.
+   * volt is a fill, never an ink: 1.09:1 → 14.2:1 on the light card. */
+  mockLiveBadgeFill: { backgroundColor: colors.brand.primary.hex },
   mockBody: { padding: spacing.sm, gap: 4 },
   mockLine: { height: 6, borderRadius: 3, backgroundColor: 'rgba(0,0,0,0.12)', width: '80%' },
   ringWrap: { width: 92, alignItems: 'center', justifyContent: 'center' },
@@ -607,6 +616,9 @@ const styles = StyleSheet.create({
   chromeLabel: { color: colors.text.muted.hex, textAlign: 'center' },
   // Shot-counter label over the LIVE camera — stays light in the light theme.
   chromeLabelCamera: { color: 'rgba(255,255,255,0.92)', textAlign: 'center' },
+  // The CAMERA-chrome badge: a DARK surface, where volt as ink measures 13.8:1
+  // and is correct — do not "fix" it. The light preview card's mock badge adds
+  // mockLiveBadgeFill + onVolt ink on top of this (see mockLiveBadgeFill).
   liveBadge: {
     position: 'absolute',
     right: spacing.lg,

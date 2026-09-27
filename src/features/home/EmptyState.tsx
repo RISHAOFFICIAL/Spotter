@@ -87,7 +87,9 @@ export function InviteBanner({ onInvite, onDismiss }: { onInvite: () => void; on
         Your crew should see this.
       </Text>
       <Pressable accessibilityRole="button" accessibilityLabel="Start a group" onPress={onInvite} hitSlop={8} style={styles.cta}>
-        <Text style={[textStyles.bodyStrong.style, { color: colors.brand.primary.hex }]}>Start a group</Text>
+        {/* volt is a fill, never an ink: this label sits on background.surface
+            (WHITE, styles.banner) where volt measured 1.31:1. text.primary 21:1. */}
+        <Text style={[textStyles.bodyStrong.style, { color: colors.text.primary.hex }]}>Start a group</Text>
       </Pressable>
     </View>
   );

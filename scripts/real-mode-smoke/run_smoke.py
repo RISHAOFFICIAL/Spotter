@@ -230,7 +230,10 @@ except Exception as e:  # node missing / script missing / timeout — never a si
 # runs the same analysis over the OLD bar shape and requires it to FAIL. Same gate
 # as flows 0/0b: missing/shrunken = FAIL, and any FAIL exits non-zero.
 BOTTOM_BAR_GUARD_SCRIPT = os.path.join(REPO_ROOT, "scripts", "smoke", "bottom-bar-guard.cjs")
-BOTTOM_BAR_GUARD_CHECKS = 33  # every PASS/FAIL line it prints; a shrink is itself a failure
+BOTTOM_BAR_GUARD_CHECKS = 48  # every PASS/FAIL line it prints; a shrink is itself a failure
+# 33 → 48 on 2026-09-27: the guard grew the "volt is a fill, never an ink" section
+# (2 rendered instances + 8 literal sites + the class-closing src sweep + a
+# negative control and its self-check). Same guard, same pinned-count contract.
 print(f"[guard] node {BOTTOM_BAR_GUARD_SCRIPT} (cwd={REPO_ROOT})", flush=True)
 try:
     bar_guard = subprocess.run(["node", BOTTOM_BAR_GUARD_SCRIPT], cwd=REPO_ROOT,

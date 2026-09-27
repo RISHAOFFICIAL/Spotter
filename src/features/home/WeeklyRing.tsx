@@ -100,7 +100,11 @@ export function WeeklyRing({
   const ringColor = missed ? colors.status.danger.hex : colors.status.success.hex;
   const numeral = `${count}/${goal}`;
   const centerLabel = weekComplete ? 'WEEK COMPLETE' : label ?? 'DAYS THIS WEEK';
-  const centerLabelColor = weekComplete ? colors.status.success.hex : colors.text.secondary.hex;
+  // volt is a fill, never an ink: the centre label is ink on the light card
+  // (1.19:1 as volt). Now one colour in both states — the week-complete state is
+  // carried by the words "WEEK COMPLETE" + the filled arc, not by a volt glyph.
+  // The volt ARC itself stays — that is a brand graphic, not text.
+  const centerLabelColor = colors.text.secondary.hex;
 
   return (
     <View

@@ -223,7 +223,7 @@ export default function HomeScreen() {
       return { text: ctx ? `0 of ${ctx.weeklyGoal} this week. One tap when you're done.` : '', color: colors.text.secondary.hex, strong: false };
     }
     if (ctx && weekCount >= ctx.weeklyGoal) {
-      return { text: `${ctx.weeklyGoal} of ${ctx.weeklyGoal} — week complete. Solid.`, color: colors.status.success.hex, strong: true };
+      return { text: `${ctx.weeklyGoal} of ${ctx.weeklyGoal} — week complete. Solid.`, color: colors.text.secondary.hex, strong: true };
     }
     if (inGroup) {
       return {

@@ -180,7 +180,8 @@ export function WelcomeStep({
           Set a weekly goal and log with photo proof — your ring starts filling today, solo or with a group.
         </Text>
         <View style={styles.privacyRow}>
-          <Text style={{ fontSize: icons.lengths.badge, color: colors.status.success.hex }}>✓</Text>
+          {/* volt is a fill, never an ink — a ✓ as ink measured 1.19:1. */}
+          <Text style={{ fontSize: icons.lengths.badge, color: colors.text.muted.hex }}>✓</Text>
           <Text style={[textStyles.caption.style, styles.privacy]}>
             Your photos are sealed to your account. Only you and your group can ever see them.
           </Text>

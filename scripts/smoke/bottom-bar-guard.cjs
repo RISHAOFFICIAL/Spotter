@@ -622,5 +622,286 @@ check(
   `chevronDownGlyph=${/name="chevron-down"/.test(homeSource)}`,
 );
 
+// --------------------------------------------------------------------------
+// 9. VOLT IS A FILL, NEVER AN INK (2026-09-27) — the contrast class, closed.
+// WHY IT LIVES IN THIS GUARD: this is the only offline suite that RENDERS real
+// app components, and two of the twelve shipped instances are in the components
+// it can already mount. The rule the design system was missing: volt #C6F135 as
+// a FOREGROUND on a light surface measures 1.19:1–1.31:1 (WCAG AA wants 4.5:1),
+// so the label whose whole job is starting a group was effectively invisible. A
+// volt FILL carrying text.onVolt #121408 ink measures 14.2:1 and is the pattern
+// the camera count badge and the Promises OPEN chip already shipped.
+//
+// Two instances are asserted on the RENDERED tree (the empty-state CTA and the
+// Home tab glyph). The other ten are literal checks against the style/source
+// declarations, because those screens need camera/photo/native stubs this guard
+// deliberately does not build — say so rather than implying pixel proof.
+//
+// EXEMPT and asserted as exempt: volt used as a BORDER on dark (the viewer tab)
+// and volt ink on the two DARK camera-chrome "Live" badges (13.8:1, correct).
+// The check on line "no volt-family ink outside its own tail" is the one that
+// catches a 13th instance.
+// --------------------------------------------------------------------------
+
+/** React with the HOOKS replaced by plain functions: these components are
+ * CALLED as functions (no reconciler here), so real useState would throw
+ * "Invalid hook call" the moment state is involved. Precedent: the harness rule
+ * recorded in the offline UI-tree guard skill. */
+const HOOKLESS_REACT = Object.assign({}, React, {
+  useState: (init) => [typeof init === 'function' ? init() : init, () => {}],
+  useRef: (init) => ({ current: init }),
+  useMemo: (fn) => fn(),
+  useCallback: (fn) => fn,
+  useEffect: () => {},
+});
+HOOKLESS_REACT.default = HOOKLESS_REACT; // esModuleInterop reaches __esModule stubs via .default
+
+const EMPTY_SRC = path.join(ROOT, 'src', 'features', 'home', 'EmptyState.tsx');
+let inviteBanner = null;
+let emptyStateError = null;
+try {
+  const typography = loadModule(path.join(ROOT, 'src', 'theme', 'typography.ts'), {
+    react: HOOKLESS_REACT,
+    'react/jsx-runtime': require('react/jsx-runtime'),
+    'react-native': RN,
+  });
+  inviteBanner = loadModule(EMPTY_SRC, {
+    react: HOOKLESS_REACT,
+    'react/jsx-runtime': require('react/jsx-runtime'),
+    'react-native': RN,
+    '@expo/vector-icons': { Ionicons: Glyph },
+    '@/theme/tokens': tokens,
+    '@/theme/typography': typography,
+  }).InviteBanner;
+} catch (error) {
+  emptyStateError = error;
+}
+check(
+  'harness: the real InviteBanner ("Start a group") renders with leaf stubs only',
+  typeof inviteBanner === 'function',
+  emptyStateError ? `${emptyStateError.name}: ${emptyStateError.message}` : typeof inviteBanner,
+);
+
+// The tokens the checks below compare against, pinned so a token edit cannot
+// make the guard compare two equal-but-wrong values.
+const VOLT = '#c6f135';
+const ON_VOLT = '#121408';
+const INK_PRIMARY = '#000000';
+const INK_SECONDARY = '#262b1e';
+const INK_MUTED = '#2f3528';
+check(
+  'volt-as-ink: the token families are the ones this rule was measured against',
+  tokens.colors.brand.primary.hex === VOLT &&
+    tokens.colors.text.onVolt.hex === ON_VOLT &&
+    tokens.colors.text.primary.hex === INK_PRIMARY &&
+    tokens.colors.text.secondary.hex === INK_SECONDARY &&
+    tokens.colors.text.muted.hex === INK_MUTED,
+  `volt=${tokens.colors.brand.primary.hex} onVolt=${tokens.colors.text.onVolt.hex} primary=${tokens.colors.text.primary.hex} secondary=${tokens.colors.text.secondary.hex} muted=${tokens.colors.text.muted.hex}`,
+);
+
+// ---- the two RENDERED instances -------------------------------------------
+let bannerCta = null;
+let bannerError = null;
+try {
+  const tree = instantiate(inviteBanner({ onInvite: () => {}, onDismiss: () => {} }));
+  bannerCta = subtree(tree).find(
+    (n) => n.type === 'Pressable' && n.props.accessibilityLabel === 'Start a group',
+  );
+} catch (error) {
+  bannerError = error;
+}
+const ctaText = bannerCta
+  ? subtree(bannerCta).find((n) => n.type === 'Text' && n.props.children === 'Start a group')
+  : null;
+check(
+  'volt-as-ink 1/12: the "Start a group" CTA ink renders as text.primary (21:1, was 1.31:1)',
+  !!ctaText && styleOf(ctaText).color === INK_PRIMARY,
+  bannerError
+    ? `${bannerError.name}: ${bannerError.message}`
+    : ctaText
+      ? `ink=${styleOf(ctaText).color}`
+      : 'the labelled CTA or its Text was not in the rendered tree',
+);
+
+const homeGlyph = renderable
+  ? subtree(grouped.slots[0].el).find((n) => n.type === 'Ionicons' && n.props.name === 'home')
+  : null;
+check(
+  'volt-as-ink 2/12: the Home tab glyph ink is text.primary (21:1, was 1.31:1)',
+  !!homeGlyph && homeGlyph.props.color === INK_PRIMARY,
+  homeGlyph ? `glyphColor=${homeGlyph.props.color}` : 'no home glyph in slot 0',
+);
+
+// ---- the ten LITERAL instances (source declarations, not pixels) -----------
+const SRC = (rel) => {
+  const f = path.join(ROOT, rel);
+  return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
+};
+/** One entry per shipped instance: `must` = the fixed declaration, `mustNot` =
+ * the retired volt-as-ink declaration it replaced. Both directions are checked —
+ * "the old text is absent" alone passes when someone deletes the element. */
+const VOLT_INK_SITES = [
+  {
+    id: '3/12',
+    file: 'src/features/home/FeedCard.tsx',
+    what: 'the feed "Live" badge is a volt FILL with onVolt ink (14.2:1, was 1.27:1)',
+    must: [
+      /<Ionicons name="radio" size=\{9\} color=\{colors\.text\.onVolt\.hex\} \/>/,
+      /backgroundColor: colors\.brand\.primary\.hex,/,
+      /liveBadgeText: \{ color: colors\.text\.onVolt\.hex \}/,
+    ],
+    mustNot: [/liveBadgeText: \{ color: colors\.brand\.primary\.hex \}/, /backgroundColor: 'rgba\(198,241,53,0\.10\)'/],
+  },
+  {
+    id: '7/12',
+    file: 'src/features/onboarding/PracticeCamStep.tsx',
+    what: 'the mock "Live" badge on the LIGHT preview card is a volt fill + onVolt ink, and the DARK camera badge is untouched',
+    must: [
+      /mockLiveBadgeFill: \{ backgroundColor: colors\.brand\.primary\.hex \}/,
+      /\[styles\.liveBadge, styles\.mockLiveBadge, styles\.mockLiveBadgeFill\]/,
+      /styles\.liveBadgeText, \{ color: colors\.text\.onVolt\.hex \}/,
+    ],
+    // The light badge MUST apply its own fill: the shared liveBadge style is the
+    // DARK camera badge and must keep volt ink (13.8:1) — if the fill moved back
+    // into the shared style the camera chrome changes with it.
+    mustNot: [/\[styles\.liveBadge, styles\.mockLiveBadge\]/],
+  },
+  {
+    id: '4-6/12',
+    file: 'src/features/onboarding/WelcomeStep.tsx|src/features/invites/EnterCodeScreen.tsx|src/features/onboarding/PracticeCamStep.tsx',
+    what: 'the three ✓ glyphs are text.muted (11.5:1, was 1.19:1)',
+    must: [/color: colors\.text\.muted\.hex \}\}>✓<\/Text>/],
+    mustNot: [/color: colors\.(status\.success|brand\.primary)\.hex \}\}>✓<\/Text>/],
+  },
+  {
+    id: '8/12',
+    file: 'src/features/home/WeeklyRing.tsx',
+    what: 'the "WEEK COMPLETE" centre label is text.secondary (13.2:1, was 1.19:1)',
+    must: [/const centerLabelColor = colors\.text\.secondary\.hex;/],
+    mustNot: [/centerLabelColor = weekComplete \? colors\.status\.success\.hex/],
+  },
+  {
+    id: '9/12',
+    file: 'src/features/home/HomeScreen.tsx',
+    what: 'the week-complete status line is text.secondary (13.2:1, was 1.19:1)',
+    must: [/week complete\. Solid\.`?, color: colors\.text\.secondary\.hex/],
+    mustNot: [/week complete\. Solid\.`?, color: colors\.status\.success\.hex/],
+  },
+  {
+    id: '10/12',
+    file: 'src/features/profile/ProfileScreen.tsx',
+    what: 'the success message is text.secondary (13.2:1, was 1.19:1)',
+    must: [/color: done \? colors\.text\.secondary\.hex : colors\.text\.danger\.hex/],
+    mustNot: [/color: done \? colors\.status\.success\.hex/],
+  },
+  {
+    id: '11/12',
+    file: 'src/features/logging/LogSheet.tsx',
+    what: 'the 64pt done checkmark is text.secondary (13.2:1, was 1.19:1)',
+    must: [/<Ionicons name="checkmark-circle" size=\{64\} color=\{colors\.text\.secondary\.hex\} \/>/],
+    mustNot: [/<Ionicons name="checkmark-circle" size=\{64\} color=\{colors\.status\.success\.hex\} \/>/],
+  },
+  {
+    id: '12/12',
+    file: 'src/features/logging/LogSheet.tsx',
+    what: 'the saving spinner is text.muted (11.5:1, was 1.19:1)',
+    must: [/<ActivityIndicator size="large" color=\{colors\.text\.muted\.hex\} \/>/],
+    mustNot: [/<ActivityIndicator size="large" color=\{colors\.brand\.primary\.hex\} \/>/],
+  },
+];
+
+/** The shared analyser. Returns a list of human-readable problems for one site,
+ * so the SAME function can be handed the retired pre-fix text as a negative
+ * control. `read` maps a file spec ("a.tsx|b.tsx") to its text. */
+function voltInkProblems(site, read) {
+  const problems = [];
+  for (const spec of site.file.split('|')) {
+    const text = read(spec);
+    const label = path.basename(spec);
+    if (!text) {
+      problems.push(`${label}: missing or unreadable`);
+      continue;
+    }
+    for (const re of site.must) {
+      if (!re.test(text)) problems.push(`${label}: missing fixed declaration ${String(re).slice(0, 48)}…`);
+    }
+    for (const re of site.mustNot) {
+      if (re.test(text)) problems.push(`${label}: retired volt-as-ink declaration is back ${String(re).slice(0, 48)}…`);
+    }
+  }
+  return problems;
+}
+
+for (const site of VOLT_INK_SITES) {
+  const problems = voltInkProblems(site, SRC);
+  check(
+    `volt-as-ink ${site.id}: ${site.what}`,
+    problems.length === 0,
+    problems.length === 0 ? 'fixed declaration present, retired one absent' : problems.join(' | '),
+  );
+}
+
+// ---- the class-closing check: nothing else may use volt as an ink ----------
+// Every surviving `color:`/`color={}` in volt family must be one of these, and
+// each one is on a DARK surface where volt measures 13.8:1 — the two camera
+// "Live" badges (LogSheet, PracticeCamStep). A 13th instance lands here.
+const VOLT_INK_EXEMPT = [
+  'src/features/logging/LogSheet.tsx',
+  'src/features/onboarding/PracticeCamStep.tsx',
+];
+const VOLT_INK_RE = /(?:^|[^a-zA-Z])color(?::\s*|\=\{)colors\.(?:brand\.primary|status\.success)\.hex/g;
+const voltInkOffenders = [];
+(function walkSrc(dir) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      walkSrc(full);
+      continue;
+    }
+    if (!/\.tsx?$/.test(entry.name)) continue;
+    const rel = path.relative(ROOT, full).split(path.sep).join('/');
+    const text = fs.readFileSync(full, 'utf8');
+    const hits = text.match(VOLT_INK_RE);
+    if (hits && !VOLT_INK_EXEMPT.includes(rel)) voltInkOffenders.push(`${rel}:${hits.length}`);
+  }
+})(path.join(ROOT, 'src'));
+check(
+  'volt-as-ink: no volt-family ink anywhere in src/ outside the two documented dark-surface badges',
+  voltInkOffenders.length === 0,
+  voltInkOffenders.length === 0 ? `exempt: ${VOLT_INK_EXEMPT.join(', ')}` : JSON.stringify(voltInkOffenders),
+);
+
+// ---- NEGATIVE CONTROL: the same analyser must FAIL the pre-fix declarations -
+// The pre-fix text is reproduced here from the shipped-old code (the values the
+// designer's audit measured at 1.27:1 and ~1.09:1) and handed to the SAME
+// analyser the checks above use. This is the in-file control; the end-to-end one
+// is running this whole guard on the pre-fix tree (see the PR evidence).
+const PRE_FIX_TEXT = {
+  'src/features/home/FeedCard.tsx': [
+    '<Ionicons name="radio" size={9} color={colors.brand.primary.hex} />',
+    "backgroundColor: 'rgba(198,241,53,0.10)',",
+    'liveBadgeText: { color: colors.brand.primary.hex },',
+  ].join('\n'),
+  'src/features/onboarding/PracticeCamStep.tsx': [
+    '<View style={[styles.liveBadge, styles.mockLiveBadge]} pointerEvents="none">',
+    '<Ionicons name="radio" size={9} color={colors.brand.primary.hex} />',
+    '<Text style={[textStyles.label.style, styles.liveBadgeText]}>Live</Text>',
+  ].join('\n'),
+};
+const preFixProblems = VOLT_INK_SITES.slice(0, 2).map((site) =>
+  voltInkProblems(site, (spec) => PRE_FIX_TEXT[spec] || '').filter((p) => /retired volt-as-ink/.test(p)),
+);
+check(
+  'negative control: the same analyser FAILS the pre-fix badge declarations (a gate that cannot fail is not a gate)',
+  preFixProblems[0].length === 2 && preFixProblems[1].length === 1,
+  `retired-declaration problems per site: ${preFixProblems.map((p) => p.length).join(', ')} (expected 2, 1)`,
+);
+const cleanControl = voltInkProblems(VOLT_INK_SITES[0], SRC);
+check(
+  'negative control self-check: the same analyser reports NOTHING on the fixed tree',
+  cleanControl.length === 0,
+  cleanControl.length === 0 ? 'no false positives' : cleanControl.join(' | '),
+);
+
 console.log(`SUMMARY: ${passes} PASS / ${fails} FAIL`);
 process.exit(fails === 0 ? 0 : 1);
