@@ -137,6 +137,27 @@ export async function clearSession(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// The password rule — declared once, here, because this module is where the
+// app ENFORCES it, and the signup screens' visible requirement copy is derived
+// from it (src/features/auth/PasswordField.tsx) rather than retyped. The live
+// auth backend enforces the same floor and says so itself: a 3-character signup
+// against the project on 2026-09-27 returned
+//   422 weak_password "Password should be at least 6 characters."
+// (measured — see /home/team/shared/password-ux-final-2026-09-27.md).
+// ---------------------------------------------------------------------------
+export const PASSWORD_MIN_LENGTH = 6;
+/**
+ * The sentence shown when a password is short of the rule. A FUNCTION, not a
+ * frozen string, so it is derived from PASSWORD_MIN_LENGTH at the moment it is
+ * shown — the same sentence `authenticate()` returns, and the same one the
+ * signup screens render. (An offline guard swaps PASSWORD_MIN_LENGTH on the
+ * compiled module and proves the UI copy follows it.)
+ */
+export function passwordTooShortMessage(min: number = PASSWORD_MIN_LENGTH): string {
+  return `Password must be at least ${min} characters.`;
+}
+
+// ---------------------------------------------------------------------------
 // Unified auth entry: single path (no signup-vs-login fork). One tap on
 // "Get started" opens the inline email+password form; submitting here either
 // signs the user in (real mode) or creates a clearly-labeled demo session.
@@ -150,8 +171,8 @@ export async function authenticate(email: string, password: string): Promise<Aut
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
     return { ok: false, error: "That email doesn't look right — try again." };
   }
-  if (password.length < 6) {
-    return { ok: false, error: 'Password must be at least 6 characters.' };
+  if (password.length < PASSWORD_MIN_LENGTH) {
+    return { ok: false, error: passwordTooShortMessage() };
   }
 
   if (!isDevMode && supabase) {

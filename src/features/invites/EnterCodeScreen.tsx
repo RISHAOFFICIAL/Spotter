@@ -17,19 +17,21 @@
  * waiting") and here.
  *
  * The inline create-account form carries a create-vs-sign-in MODE, exactly like
- * WelcomeStep's (owner report 2026-09-26; PR #42 fixed the first screen and this
- * is the second screen that had the same defect — the one an invited reviewer
- * hits, and the one App Store frame 07 depicts):
- *  - a masked field is hard to check, so every password field gets a 48pt
- *    reveal/hide control that really flips that field's secure state;
- *  - CREATE mode (the default on this screen: an invited newcomer without an
- *    account is making one) adds a "Confirm password" field whose mismatch
- *    BLOCKS the submit — it never reaches authenticate() — and is rendered by
- *    the error line already on this stage, never silently discarded;
- *  - SIGN-IN mode is for the invitee who already has an account: one password
- *    field, no confirmation.
- * The glyph vocabulary and accessibility labels are shared with WelcomeStep on
- * purpose; the two forms must read as one product.
+ * WelcomeStep's, and ONE shared password row
+ * (src/features/auth/PasswordField.tsx) so the two forms read as one product
+ * (owner's final shape, 2026-09-27):
+ *  - one password field — never a confirm field on either screen;
+ *  - a 48pt (>=44pt) show/hide toggle whose VoiceOver label follows the state
+ *    ("Show password" / "Hide password") and really flips the field's secure
+ *    state;
+ *  - the requirement ("At least 6 characters.") visible at the point of entry,
+ *    derived from PASSWORD_MIN_LENGTH — the rule src/lib/supabase.ts enforces
+ *    and the rule the live auth backend enforces;
+ *  - entry-time validation rendered under the field in the danger colour as
+ *    soon as the typed password is short of the rule;
+ *  - submitting a password short of the rule is BLOCKED before authenticate() —
+ *    it never reaches authenticate(), and the message is rendered, never
+ *    silently discarded.
  */
 import React, { useRef, useState } from 'react';
 import {
@@ -51,6 +53,8 @@ const KeyboardAvoidingView = KAV as unknown as React.ComponentType<{
 }>;
 
 import { AppButton, TextButton } from '@/components/AppButton';
+import { PASSWORD_MIN_LENGTH, passwordTooShortMessage } from '@/lib/supabase';
+import { PasswordField } from '@/features/auth/PasswordField';
 import { colors, icons, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
 import { useAuth } from '@/features/auth/AuthProvider';
@@ -65,44 +69,6 @@ import {
 type Stage = 'enter' | 'found';
 type AuthMode = 'create' | 'sign-in';
 
-/** Shown when the two create-mode passwords disagree (same string as WelcomeStep). */
-const PASSWORD_MISMATCH = "Those passwords don't match — try again.";
-
-/**
- * Reveal/hide control for one masked field. 48×48 (≥44pt) hit target, and the
- * accessibility label follows the state so a screen reader announces the action
- * the tap will perform. `revealed` is the parent's state, so the glyph and the
- * field's secureTextEntry can never disagree. Byte-identical pattern to
- * WelcomeStep's control (PR #42) — the two forms must read as one product.
- */
-function RevealToggle({
-  revealed,
-  onToggle,
-  showLabel,
-  hideLabel,
-}: {
-  revealed: boolean;
-  onToggle: () => void;
-  showLabel: string;
-  hideLabel: string;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={revealed ? hideLabel : showLabel}
-      onPress={onToggle}
-      hitSlop={8}
-      style={styles.revealBtn}
-    >
-      <Ionicons
-        name={revealed ? 'eye-off-outline' : 'eye-outline'}
-        size={icons.lengths.badge}
-        color={colors.text.muted.hex}
-      />
-    </Pressable>
-  );
-}
-
 export function EnterCodeScreen() {
   const router = useRouter();
   const { session, refresh } = useAuth();
@@ -115,9 +81,6 @@ export function EnterCodeScreen() {
   const [authPassword, setAuthPassword] = useState('');
   // CREATE is the default: the newcomer on this stage has no account yet.
   const [authMode, setAuthMode] = useState<AuthMode>('create');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [revealPassword, setRevealPassword] = useState(false);
-  const [revealConfirm, setRevealConfirm] = useState(false);
   const lastCode = useRef('');
   const isCreate = authMode === 'create';
 
@@ -180,21 +143,22 @@ export function EnterCodeScreen() {
   // if the invitee has no account yet they create one, THEN accept.
   const ensureAccountThenAccept = async () => {
     setError(null);
-    // CREATE mode only, and it BLOCKS (the same rule WelcomeStep learned from
-    // the 2026-09-26 owner report): a mismatch never reaches authenticate() —
-    // it is rendered by the danger-coloured error line on this stage, never
-    // silently discarded. A first-run typo can therefore not quietly create an
-    // account nobody can sign back into.
-    if (isCreate && confirmPassword !== authPassword) {
-      setError(PASSWORD_MISMATCH);
-      return;
-    }
     if (!authEmail || !authPassword) {
       setError(
         isCreate
           ? 'Enter your email and password to create your account.'
           : 'Enter the email and password for your account.',
       );
+      return;
+    }
+    // The one gate on this screen, and it is the rule the auth module and the
+    // live backend both enforce (PASSWORD_MIN_LENGTH): a short password never
+    // reaches authenticate(), and the message is rendered by the danger-coloured
+    // error line already on this stage — never silently discarded. A first-run
+    // typo can therefore not quietly create an account nobody can sign back
+    // into.
+    if (authPassword.length < PASSWORD_MIN_LENGTH) {
+      setError(passwordTooShortMessage());
       return;
     }
     setBusy(true);
@@ -295,48 +259,13 @@ export function EnterCodeScreen() {
                     style={styles.input}
                     accessibilityLabel="Email"
                   />
-                  {/* textContentType stays "password" in both modes, matching
-                      WelcomeStep: switching it to "newPassword" would hand iOS's
-                      strong-password AutoFill this form — a visible behaviour
-                      change nobody asked for. */}
-                  <View style={styles.field}>
-                    <TextInput
-                      value={authPassword}
-                      onChangeText={setAuthPassword}
-                      placeholder="Password (6+ characters)"
-                      placeholderTextColor={colors.text.muted.hex}
-                      secureTextEntry={!revealPassword}
-                      textContentType="password"
-                      style={[styles.input, styles.inputWithReveal]}
-                      accessibilityLabel="Password"
-                    />
-                    <RevealToggle
-                      revealed={revealPassword}
-                      onToggle={() => setRevealPassword((v) => !v)}
-                      showLabel="Show password"
-                      hideLabel="Hide password"
-                    />
-                  </View>
-                  {isCreate ? (
-                    <View style={styles.field}>
-                      <TextInput
-                        value={confirmPassword}
-                        onChangeText={setConfirmPassword}
-                        placeholder="Confirm password"
-                        placeholderTextColor={colors.text.muted.hex}
-                        secureTextEntry={!revealConfirm}
-                        autoCapitalize="none"
-                        style={[styles.input, styles.inputWithReveal]}
-                        accessibilityLabel="Confirm password"
-                      />
-                      <RevealToggle
-                        revealed={revealConfirm}
-                        onToggle={() => setRevealConfirm((v) => !v)}
-                        showLabel="Show confirm password"
-                        hideLabel="Hide confirm password"
-                      />
-                    </View>
-                  ) : null}
+                  {/* ONE password row (owner's final shape), the same shared
+                      component WelcomeStep renders — no confirm field, a
+                      show/hide toggle whose VoiceOver label follows the state,
+                      the requirement visible, entry-time validation rendered.
+                      `centered` keeps this screen's centred input text; the
+                      shared component's styles are the same on both screens. */}
+                  <PasswordField value={authPassword} onChangeText={setAuthPassword} centered />
                   {/* Mode switch, same muted-caption row and same two strings as
                       WelcomeStep (PR #42). Both modes share the one submit path —
                       authenticate() signs in or creates. */}
@@ -410,23 +339,9 @@ const styles = StyleSheet.create({
   // The auth row stack: a real 8pt rhythm between rows, the same rhythm
   // WelcomeStep's form uses (this screen's rows had no margin at all).
   authForm: { gap: spacing.sm },
-  // Password rows: `styles.input` stays untouched (height, radius, colour,
-  // centred text); the wrapper only gives the 48pt reveal control something to
-  // sit on, and `inputWithReveal` reserves its width. Unlike WelcomeStep — whose
-  // input text is left-aligned, so a right pad alone cannot shift it — this
-  // screen centres its text, so BOTH sides are padded and the placeholder stays
-  // optically centred with the glyph sitting over the right pad.
-  field: { position: 'relative', justifyContent: 'center' },
-  inputWithReveal: { paddingLeft: 48, paddingRight: 48 },
-  revealBtn: {
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    width: 48,
-    height: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  // Password rows live in src/features/auth/PasswordField.tsx now, styles and
+  // all (including the centred-text variant), so this screen and WelcomeStep
+  // cannot drift apart.
   modeRow: {
     minHeight: 44,
     alignItems: 'center',
