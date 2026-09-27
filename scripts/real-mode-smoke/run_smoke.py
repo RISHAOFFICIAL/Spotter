@@ -443,6 +443,44 @@ try:
             f"parsed {pux_parsed} result lines (exit={pux_guard.returncode}) — the guard lost checks")
 except Exception as e:  # node missing / script missing / timeout — never a silent skip
     rec("0g-password-ux", "password-ux guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
+# 0h: THE HARNESS'S OWN FRESHNESS (2026-09-27). Every guard above asserts against
+# scripts/smoke/*.compiled/, a gitignored directory that persists across commits in
+# a working tree. Until 2026-09-27 the compiler only mkdir'd + wrote, so a module
+# deleted from src/ (and from the compiler's FILES list) left its compiled .js on
+# disk and a guard requiring that path kept loading it: the gate stayed GREEN
+# against deleted source (reproduced on the pre-#48 tree de8e087: promise-rollover
+# 21 PASS / 0 FAIL and bottom-bar 33 PASS / 0 FAIL, both exit 0, while asserting
+# against a deleted src/lib/promises.ts). compile.cjs now cleans + asserts; this
+# guard is the TEST for it, because a fix with no test is deleted by the next
+# cleanup pass and this defect's absence is silent by construction. It reads the
+# directory itself (never the compiler's stdout) and applies ONE analyser to both
+# the real tree and to a scratch copy of the PRE-#48 compiler, requiring opposite
+# verdicts; it also proves the path validation refuses a mis-derived output dir
+# without deleting anything, and that no guard in scripts/smoke/ reads the compiled
+# output without spawning the compiler and testing its exit status.
+# Same gate as flows 0/0b/0c/0d/0e/0f/0g: missing/shrunken = FAIL, any FAIL exits non-zero.
+COMPILE_FRESHNESS_GUARD_SCRIPT = os.path.join(REPO_ROOT, "scripts", "smoke", "compile-freshness-guard.cjs")
+COMPILE_FRESHNESS_GUARD_CHECKS = 15  # every PASS/FAIL line it prints; a shrink is itself a failure
+print(f"[guard] node {COMPILE_FRESHNESS_GUARD_SCRIPT} (cwd={REPO_ROOT})", flush=True)
+try:
+    cf_guard = subprocess.run(["node", COMPILE_FRESHNESS_GUARD_SCRIPT], cwd=REPO_ROOT,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True, timeout=300)
+    cf_parsed = 0
+    for cline in (cf_guard.stdout or "").splitlines():
+        cm = re.match(r"^(PASS|FAIL)\s+(.*?)(?:\s+::\s+(.*))?$", cline.rstrip())
+        if not cm:
+            continue
+        cf_parsed += 1
+        rec("0h-compile-freshness", cm.group(2).strip(), cm.group(1), (cm.group(3) or "").strip())
+    if cf_parsed == 0:
+        rec("0h-compile-freshness", "compile-freshness guard emitted PASS/FAIL lines", FAIL,
+            f"parsed 0 result lines, exit={cf_guard.returncode}, stderr={short((cf_guard.stderr or '').strip())}")
+    elif cf_parsed != COMPILE_FRESHNESS_GUARD_CHECKS:
+        rec("0h-compile-freshness", f"compile-freshness guard reported all {COMPILE_FRESHNESS_GUARD_CHECKS} checks", FAIL,
+            f"parsed {cf_parsed} result lines (exit={cf_guard.returncode}) — the guard lost checks")
+except Exception as e:  # node missing / script missing / timeout — never a silent skip
+    rec("0h-compile-freshness", "compile-freshness guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
 # ---------------- FLOW 1: SIGNUP + SIGNIN ----------------
 users = {}
 for k in "abc":
