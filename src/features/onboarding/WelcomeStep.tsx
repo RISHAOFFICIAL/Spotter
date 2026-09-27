@@ -6,8 +6,18 @@
  * Layout per onboarding.md: wordmark (24pt/800 centered), hero illustration,
  * headline (display 32), subhead (body/secondary), privacy promise line with
  * 14pt shield-check (volt) left of it, then "Get started" primary CTA.
- * Auth (single path) happens on "Get started" tap via an inline form on this
- * same screen — no create-vs-login fork.
+ * Auth happens on "Get started" tap via an inline form on this same screen.
+ * There is still ONE submit path (authenticate() signs in or creates the
+ * account); the form only carries a create-vs-sign-in MODE, because the two
+ * need different password affordances (2026-09-26 owner report):
+ *  - a masked field is hard to check, so every password field gets a 48pt
+ *    reveal/hide control that really flips the field's secure state;
+ *  - CREATE mode adds a "Confirm password" field whose mismatch BLOCKS the
+ *    submit and is rendered under the fields (never silently discarded — the
+ *    same honesty rule PR #39 set for onboarding write failures), so a first-run
+ *    typo can no longer quietly create an account nobody can sign back into;
+ *  - SIGN-IN mode keeps the single password field it always had.
+ * Create is the default: the first-run user on this screen is making an account.
  */
 import React, { useState } from 'react';
 import { Image, KeyboardAvoidingView as KAV, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -29,6 +39,45 @@ import { InviteRow } from '@/features/invites/InviteRow';
 
 const DEV_BANNER = 'DEV DEMO — LOCAL MOCK';
 
+/** Shown under the fields when the two create-mode passwords disagree. */
+const PASSWORD_MISMATCH = "Those passwords don't match — try again.";
+
+type AuthMode = 'create' | 'sign-in';
+
+/**
+ * Reveal/hide control for one masked field. 48×48 (≥44pt) hit target, and the
+ * accessibility label follows the state so a screen reader announces the
+ * action the tap will perform. `revealed` is the parent's state, so the glyph
+ * and the field's secureTextEntry can never disagree.
+ */
+function RevealToggle({
+  revealed,
+  onToggle,
+  showLabel,
+  hideLabel,
+}: {
+  revealed: boolean;
+  onToggle: () => void;
+  showLabel: string;
+  hideLabel: string;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={revealed ? hideLabel : showLabel}
+      onPress={onToggle}
+      hitSlop={8}
+      style={styles.revealBtn}
+    >
+      <Ionicons
+        name={revealed ? 'eye-off-outline' : 'eye-outline'}
+        size={icons.lengths.badge}
+        color={colors.text.muted.hex}
+      />
+    </Pressable>
+  );
+}
+
 export function WelcomeStep({
   onDone,
 }: {
@@ -36,13 +85,31 @@ export function WelcomeStep({
 }) {
   const router = useRouter();
   const [showAuth, setShowAuth] = useState(false);
+  const [authMode, setAuthMode] = useState<AuthMode>('create');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [revealPassword, setRevealPassword] = useState(false);
+  const [revealConfirm, setRevealConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const isCreate = authMode === 'create';
+
+  // Switching mode must not carry the other mode's message into the new form.
+  const switchMode = (next: AuthMode) => {
+    setAuthMode(next);
+    setError(null);
+  };
 
   const submit = async () => {
     setError(null);
+    // CREATE mode only, and it BLOCKS: a mismatch never reaches authenticate(),
+    // and it is rendered (the state below feeds the message under the fields) —
+    // never silently discarded.
+    if (isCreate && confirmPassword !== password) {
+      setError(PASSWORD_MISMATCH);
+      return;
+    }
     setBusy(true);
     // Auth handled by the caller through the single path (authenticate());
     // on success we advance. The form lives here for the inline UX.
@@ -96,21 +163,66 @@ export function WelcomeStep({
                 style={styles.input}
                 accessibilityLabel="Email"
               />
-              <TextInput
-                value={password}
-                onChangeText={setPassword}
-                placeholder="Password"
-                placeholderTextColor={colors.text.muted.hex}
-                secureTextEntry
-                textContentType="password"
-                style={styles.input}
-                accessibilityLabel="Password"
-              />
+              {/* textContentType stays "password" in both modes on purpose:
+                  switching it to "newPassword" would hand iOS's strong-password
+                  AutoFill this form, which is a visible behaviour change the
+                  owner did not ask for. */}
+              <View style={styles.field}>
+                <TextInput
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder="Password"
+                  placeholderTextColor={colors.text.muted.hex}
+                  secureTextEntry={!revealPassword}
+                  textContentType="password"
+                  style={[styles.input, styles.inputWithReveal]}
+                  accessibilityLabel="Password"
+                />
+                <RevealToggle
+                  revealed={revealPassword}
+                  onToggle={() => setRevealPassword((v) => !v)}
+                  showLabel="Show password"
+                  hideLabel="Hide password"
+                />
+              </View>
+              {isCreate ? (
+                <View style={styles.field}>
+                  <TextInput
+                    value={confirmPassword}
+                    onChangeText={setConfirmPassword}
+                    placeholder="Confirm password"
+                    placeholderTextColor={colors.text.muted.hex}
+                    secureTextEntry={!revealConfirm}
+                    autoCapitalize="none"
+                    style={[styles.input, styles.inputWithReveal]}
+                    accessibilityLabel="Confirm password"
+                  />
+                  <RevealToggle
+                    revealed={revealConfirm}
+                    onToggle={() => setRevealConfirm((v) => !v)}
+                    showLabel="Show confirm password"
+                    hideLabel="Hide confirm password"
+                  />
+                </View>
+              ) : null}
               {error ? (
                 <Text style={[textStyles.caption.style, { color: colors.text.danger.hex, marginTop: spacing.xs }]}>
                   {error}
                 </Text>
               ) : null}
+              {/* Mode switch, same muted-caption row as "Have an invite code?"
+                  below. Both modes share the one submit path (authenticate());
+                  only the password affordances differ. */}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={isCreate ? 'Already have an account? Sign in' : 'New here? Create an account'}
+                onPress={() => switchMode(isCreate ? 'sign-in' : 'create')}
+                style={styles.modeRow}
+              >
+                <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>
+                  {isCreate ? 'Already have an account? Sign in' : 'New here? Create an account'}
+                </Text>
+              </Pressable>
             </KeyboardAvoidingView>
           ) : (
             <Text style={[textStyles.caption.style, { color: colors.text.muted.hex, textAlign: 'center' }]}>
@@ -198,5 +310,26 @@ const styles = StyleSheet.create({
     color: colors.text.primary.hex,
     fontSize: 16,
     marginBottom: spacing.sm,
+  },
+  // Password rows: the input keeps `styles.input` untouched (same height,
+  // radius, colour, spacing); the wrapper only gives the 48pt reveal control
+  // something to sit on, and `inputWithReveal` reserves its width inside the
+  // field so the typed text never runs under the glyph.
+  field: { position: 'relative', justifyContent: 'center' },
+  inputWithReveal: { paddingRight: 48 },
+  revealBtn: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    width: 48,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modeRow: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: spacing.xs,
   },
 });

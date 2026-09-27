@@ -398,6 +398,40 @@ try:
             f"parsed {onb_parsed} result lines (exit={onb_guard.returncode}) — the guard lost checks")
 except Exception as e:  # node missing / script missing / timeout — never a silent skip
     rec("0d-onboarding-order", "onboarding-order guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
+# 0g: the signup password UX (owner report 2026-09-26). A masked field with no
+# reveal control and no confirmation let a first-run typo create an account
+# nobody can sign back into — on the one screen the north-star metric needs
+# completed. scripts/smoke/password-ux-guard.cjs renders the REAL
+# WelcomeStep (leaf deps stubbed) and asserts BEHAVIOUR: the reveal control
+# exists and really flips secureTextEntry, create mode has a confirm field and
+# sign-in mode does not, a mismatch renders a danger-coloured message AND never
+# reaches authenticate() (counting spy + counting Supabase client), a match
+# calls it exactly once. It also freezes the landing-state text against master,
+# so the App Store frame cut from this screen cannot go stale. Its own negative
+# control (master's component) fails 18 of the 23 checks.
+# Same gate as flows 0/0b/0c/0d/0e/0f: missing/shrunken = FAIL, any FAIL exits non-zero.
+PASSWORD_UX_GUARD_SCRIPT = os.path.join(REPO_ROOT, "scripts", "smoke", "password-ux-guard.cjs")
+PASSWORD_UX_GUARD_CHECKS = 23  # every PASS/FAIL line it prints; a shrink is itself a failure
+print(f"[guard] node {PASSWORD_UX_GUARD_SCRIPT} (cwd={REPO_ROOT})", flush=True)
+try:
+    pux_guard = subprocess.run(["node", PASSWORD_UX_GUARD_SCRIPT], cwd=REPO_ROOT,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, timeout=300)
+    pux_parsed = 0
+    for pline in (pux_guard.stdout or "").splitlines():
+        pm = re.match(r"^(PASS|FAIL)\s+(.*?)(?:\s+::\s+(.*))?$", pline.rstrip())
+        if not pm:
+            continue
+        pux_parsed += 1
+        rec("0g-password-ux", pm.group(2).strip(), pm.group(1), (pm.group(3) or "").strip())
+    if pux_parsed == 0:
+        rec("0g-password-ux", "password-ux guard emitted PASS/FAIL lines", FAIL,
+            f"parsed 0 result lines, exit={pux_guard.returncode}, stderr={short((pux_guard.stderr or '').strip())}")
+    elif pux_parsed != PASSWORD_UX_GUARD_CHECKS:
+        rec("0g-password-ux", f"password-ux guard reported all {PASSWORD_UX_GUARD_CHECKS} checks", FAIL,
+            f"parsed {pux_parsed} result lines (exit={pux_guard.returncode}) — the guard lost checks")
+except Exception as e:  # node missing / script missing / timeout — never a silent skip
+    rec("0g-password-ux", "password-ux guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
 # ---------------- FLOW 1: SIGNUP + SIGNIN ----------------
 users = {}
 for k in "abc":
