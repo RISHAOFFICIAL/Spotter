@@ -502,8 +502,9 @@ export function ProfileScreen() {
           </Text>
         </View>
 
+        {/* volt is a fill, never an ink: a volt success message measured 1.19:1. */}
         {message && (
-          <Text style={[textStyles.caption.style, { color: done ? colors.status.success.hex : colors.text.danger.hex, textAlign: 'center', marginTop: spacing.lg }]}>
+          <Text style={[textStyles.caption.style, { color: done ? colors.text.secondary.hex : colors.text.danger.hex, textAlign: 'center', marginTop: spacing.lg }]}>
             {message}
           </Text>
         )}

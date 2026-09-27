@@ -233,7 +233,8 @@ export function EnterCodeScreen() {
               Everyone in the group sees each other\u2019s photo-proof logs. Your weekly ring counts only your workouts — theirs counts only theirs.
             </Text>
             <View style={styles.privacyRow}>
-              <Text style={{ fontSize: 14, color: colors.brand.primary.hex }}>✓</Text>
+              {/* volt is a fill, never an ink — a ✓ as ink measured 1.19:1. */}
+              <Text style={{ fontSize: 14, color: colors.text.muted.hex }}>✓</Text>
               <Text style={[textStyles.caption.style, styles.privacy]}>
                 Photos stay sealed per person — group members see each other\u2019s, never anyone else\u2019s.
               </Text>

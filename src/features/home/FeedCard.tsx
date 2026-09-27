@@ -115,7 +115,10 @@ export function FeedCard({ log, now }: { log: WorkoutLog; now: Date }) {
             </Text>
             {hasPhoto && (
               <View style={styles.liveBadge}>
-                <Ionicons name="radio" size={9} color={colors.brand.primary.hex} />
+                {/* "Live" is a claim in the App Store description. volt is a fill,
+                    never an ink: the badge is a volt pill with text.onVolt ink
+                    (14.2:1), the pattern CameraButton's count badge uses. */}
+                <Ionicons name="radio" size={9} color={colors.text.onVolt.hex} />
                 <Text style={[textStyles.label.style, styles.liveBadgeText]}>Live</Text>
               </View>
             )}
@@ -242,9 +245,9 @@ const styles = StyleSheet.create({
     borderRadius: 9,
     borderWidth: 1,
     borderColor: 'rgba(198,241,53,0.35)',
-    backgroundColor: 'rgba(198,241,53,0.10)',
+    backgroundColor: colors.brand.primary.hex,
   },
-  liveBadgeText: { color: colors.brand.primary.hex },
+  liveBadgeText: { color: colors.text.onVolt.hex },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   more: {
     width: 32,

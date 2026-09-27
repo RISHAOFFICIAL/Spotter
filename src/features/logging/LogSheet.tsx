@@ -497,13 +497,17 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
 
         {stage === 'saving' && (
           <View style={styles.savingWrap}>
-            <ActivityIndicator size="large" color={colors.brand.primary.hex} />
+            {/* volt is a fill, never an ink — the spinner is the only thing on
+                screen while saving, so an invisible one is a dead-feeling wait. */}
+            <ActivityIndicator size="large" color={colors.text.muted.hex} />
           </View>
         )}
 
         {stage === 'done' && (
           <View style={styles.doneWrap}>
-            <Ionicons name="checkmark-circle" size={64} color={colors.status.success.hex} />
+            {/* volt is a fill, never an ink — the 64pt done checkmark as volt ink
+                measured 1.19:1 on the sheet body. */}
+            <Ionicons name="checkmark-circle" size={64} color={colors.text.secondary.hex} />
             <Text style={[textStyles.bodyStrong.style, { color: colors.text.primary.hex, textAlign: 'center' }]}>
               Added to your week
             </Text>

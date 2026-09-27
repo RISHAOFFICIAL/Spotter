@@ -43,7 +43,9 @@ export function BottomBar({
       {/* Home — active: scrolls the Home feed back to the top (iOS convention).
           Already at the top → the scroll is a no-op, which is the honest answer. */}
       <Pressable accessibilityRole="button" accessibilityLabel="Home" onPress={onHome} style={styles.slot} hitSlop={6}>
-        <Ionicons name="home" size={iconsTab} color={colors.brand.primary.hex} />
+        {/* volt is a fill, never an ink — the bar sits on a light surface, where
+            volt as a glyph measured 1.31:1. */}
+        <Ionicons name="home" size={iconsTab} color={colors.text.primary.hex} />
       </Pressable>
 
       {/* Promises — the pair-private ledger (receipts glyph rejected: the ledger
