@@ -1,0 +1,50 @@
+{
+  "_note": [
+    "Native-module registry as seen by the device-parity harness. Test infrastructure only.",
+    "Source of truth: /home/team/shared/build25-native-module-diff-2026-09-22.txt (LIST 1), which was",
+    "produced by reading the shipped release IPA (build 22) binaries with /home/team/shared/",
+    "native-module-diff-25.py: every name below has a literal in the app executable or an embedded",
+    "framework (verified unencrypted). Names in `flagged` are module names the JS bundle asks for",
+    "whose literal is invisible to a byte scan because Swift stores a <=15-byte string literal",
+    "inline, with the module CLASS symbol present instead (ExpoFont.framework contains",
+    "_TtC8ExpoFont16FontLoaderModule) -- they are treated as registered, so this harness does NOT",
+    "manufacture a missing-module throw. That question is answered by the static binary check, not",
+    "here: the stub layer is permissive by design."
+  ],
+  "registered": [
+    "CameraViewModule",
+    "ExpoAsset",
+    "ExpoCrypto",
+    "ExpoDevice",
+    "ExpoFetchModule",
+    "ExpoGlassEffect",
+    "ExpoImageModule",
+    "ExpoImageManipulator",
+    "ExpoKeepAwake",
+    "ExpoLinking",
+    "ExpoModulesCore",
+    "ExpoModulesCoreJSLogger",
+    "ExpoSecureStore",
+    "ExpoSplashScreen",
+    "ExpoSystemUI",
+    "ExpoWebBrowser",
+    "ExponentConstants",
+    "ExponentFileSystem",
+    "FileSystem",
+    "FileSystemModule",
+    "NativeAnimatedModule",
+    "RNCSafeAreaContext",
+    "RNGestureHandlerModule",
+    "RNSModule",
+    "RNSVGRenderableModule",
+    "RNSVGSvgViewModule",
+    "ReanimatedModule",
+    "SymbolModule",
+    "UIManager"
+  ],
+  "flagged": {
+    "ExpoApplication": "expo-application requireNativeModule(); literal is 15 bytes -> invisible to the byte scan; class compiled in the app",
+    "ExpoBadgeModule": "expo-notifications BadgeModule.native.ts requireNativeModule(); 15 bytes -> invisible; class compiled in the app",
+    "ExpoFontLoader": "expo-font requireNativeModule() at MODULE SCOPE (reached on first render via @expo/vector-icons); 14 bytes -> invisible; ExpoFont.framework contains _TtC8ExpoFont16FontLoaderModule"
+  }
+}
