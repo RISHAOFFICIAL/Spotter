@@ -55,10 +55,13 @@ import { textStyles } from '@/theme/typography';
 import { logWorkout, type NewWorkout } from '@/lib/workoutStore';
 import { bakeSelfieFiltered } from '@/lib/selfieBake';
 import {
+  SELFIE_ENHANCEMENT_DISCLOSURE,
+  SELFIE_FILTER_FAMILIES,
   SELFIE_FILTER_HELPER,
-  SELFIE_FILTER_IDS,
   SELFIE_FILTER_PRESETS,
+  SELFIE_REVIEW_HONESTY_LINE,
   filterA11yLabel,
+  isEnhancementFilter,
   type SelfieFilter,
 } from '@/lib/filters';
 import { WORKOUT_TYPES, type WorkoutType, type WorkoutLog } from '@/lib/workouts';
@@ -300,7 +303,11 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
                 </Text>
               </View>
 
-              {/* Live filter grade (approximation of the baked result) — selfie only. */}
+              {/* Live filter grade (approximation of the baked result) — selfie
+                  only, LOOK family only. A SKIN enhancement has no previewTint
+                  by construction (see filters.ts): its grade is mask-conditioned
+                  and a flat full-bleed tint cannot show it, so the live view
+                  claims nothing and the REVIEW thumb is the preview. */}
               {stage === 'shot1' && filter !== 'none' && filterPreset.previewTint && (
                 <View pointerEvents="none" style={[styles.filterTint, { backgroundColor: filterPreset.previewTint }]} />
               )}
@@ -316,45 +323,72 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
               )}
             </View>
 
-            {/* Filter chip row — selfie stage only, under the preview, above the bar. */}
+            {/* Filter chip rows — selfie stage only, under the preview, above
+                the bar. TWO families, ONE choice: the LOOK grades (tonal) and
+                the SKIN enhancements (geometry-free), separated by a hairline
+                and each carrying its own group label. Keeping one `filter`
+                value preserves the whole existing bake path — one value, one
+                `bakeSelfieFiltered` call, one baked JPEG. Selecting a chip in
+                either row replaces the choice (no combining, by design); the
+                'None' chip in LOOK turns everything off, and tapping the
+                selected SKIN chip again turns it off too. */}
             {stage === 'shot1' && (
               <View style={styles.filterBar}>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.filterRow}
-                  keyboardShouldPersistTaps="handled"
-                >
-                  {SELFIE_FILTER_IDS.map((f) => {
-                    const selected = filter === f;
-                    return (
-                      <Pressable
-                        key={f}
-                        accessibilityRole="button"
-                        accessibilityLabel={filterA11yLabel(f)}
-                        accessibilityState={{ selected }}
-                        onPress={() => setFilter(f)}
-                        style={({ pressed }) => [
-                          styles.chip,
-                          selected && styles.chipSelected,
-                          pressed && { opacity: 0.85 },
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            textStyles.captionStrong.style,
-                            { color: selected ? colors.text.onVolt.hex : colors.text.primary.hex },
-                          ]}
-                        >
-                          {SELFIE_FILTER_PRESETS[f].label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-                <Text style={[textStyles.caption.style, styles.filterHelper]}>
-                  {SELFIE_FILTER_HELPER}
-                </Text>
+                {SELFIE_FILTER_FAMILIES.map((family, familyIndex) => (
+                  <View key={family.family} style={familyIndex > 0 ? styles.filterFamilySpaced : undefined}>
+                    {familyIndex > 0 && <View style={styles.filterFamilyRule} />}
+                    <Text style={[textStyles.label.style, styles.filterFamilyLabel]}>
+                      {family.label}
+                    </Text>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.filterRow}
+                      keyboardShouldPersistTaps="handled"
+                    >
+                      {family.ids.map((f) => {
+                        const selected = filter === f;
+                        // Tapping the selected SKIN chip clears it, because that
+                        // row has no 'None' of its own — the row you turned it
+                        // on from is the row you turn it off from. The LOOK row
+                        // keeps today's behaviour exactly (it has 'None').
+                        const clearable = family.family === 'skin';
+                        return (
+                          <Pressable
+                            key={f}
+                            accessibilityRole="button"
+                            accessibilityLabel={filterA11yLabel(f)}
+                            accessibilityState={{ selected }}
+                            onPress={() => setFilter(clearable && selected ? 'none' : f)}
+                            style={({ pressed }) => [
+                              styles.chip,
+                              selected && styles.chipSelected,
+                              pressed && { opacity: 0.85 },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                textStyles.captionStrong.style,
+                                { color: selected ? colors.text.onVolt.hex : colors.text.primary.hex },
+                              ]}
+                            >
+                              {SELFIE_FILTER_PRESETS[f].label}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </ScrollView>
+                    {family.family === 'skin' && isEnhancementFilter(filter) ? (
+                      <Text style={[textStyles.caption.style, styles.filterHelper]}>
+                        {SELFIE_ENHANCEMENT_DISCLOSURE}
+                      </Text>
+                    ) : family.family === 'look' ? (
+                      <Text style={[textStyles.caption.style, styles.filterHelper]}>
+                        {SELFIE_FILTER_HELPER}
+                      </Text>
+                    ) : null}
+                  </View>
+                ))}
               </View>
             )}
 
@@ -425,6 +459,18 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
                   <Text style={styles.reviewShotLabel}>YOUR SPOT</Text>
                 </Pressable>
               </View>
+              {/* THE AUTHORITATIVE PREVIEW for a SKIN enhancement. The thumbs
+                  above are the actual baked JPEG — the exact bytes that get
+                  uploaded — which is why this line can be literal. There is no
+                  full-bleed live tint for an enhancement (the viewfinder makes
+                  no claim about a masked grade), so this is where the user
+                  sees what the group will see, with Retake and the upload
+                  decision still ahead of them. */}
+              {isEnhancementFilter(filter) && (
+                <Text style={[textStyles.caption.style, styles.reviewHonesty]}>
+                  {SELFIE_REVIEW_HONESTY_LINE}
+                </Text>
+              )}
             </View>
 
             <ScrollView
@@ -637,6 +683,14 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
     paddingBottom: spacing.xs,
   },
+  /** Hairline + breathing room between the LOOK row and the SKIN row. */
+  filterFamilySpaced: { marginTop: spacing.sm },
+  filterFamilyRule: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0,0,0,0.08)',
+    marginBottom: spacing.sm,
+  },
+  filterFamilyLabel: { color: colors.text.muted.hex, marginBottom: spacing.xs },
   bottomBar: {
     backgroundColor: colors.background.surface.hex,
     borderTopWidth: 1,
@@ -673,6 +727,13 @@ const styles = StyleSheet.create({
   },
   cancelBtn: { alignItems: 'center', justifyContent: 'center', width: 64 },
   reviewShotsWrap: { flex: 1, backgroundColor: '#000', justifyContent: 'center' },
+  /** The authoritative-preview line — over the black review area, so it is white. */
+  reviewHonesty: {
+    color: 'rgba(255,255,255,0.92)',
+    textAlign: 'center',
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.lg,
+  },
   chromeTopReview: {
     position: 'absolute',
     top: 0,

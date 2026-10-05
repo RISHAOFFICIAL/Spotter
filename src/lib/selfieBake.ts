@@ -2,11 +2,12 @@
  * Selfie-filter file orchestration (dual-capture v1.0).
  *
  * Reads the captured selfie JPEG → native resize to a working width (keeps the
- * pure-JS per-pixel bake fast on Hermes) → bakes the tonal grade → writes the
- * graded JPEG to cache. The bytes written here are EXACTLY the bytes logged and
- * uploaded — "baked at capture", on-device, no preset-id upload, no
- * post-processing claim. The environment (back) shot is never filtered and
- * never routed through this module.
+ * pure-JS per-pixel bake fast on Hermes) → bakes the chosen grade (a tonal look
+ * from the LOOK family, or the geometry-free Glow enhancement from the SKIN
+ * family) → writes the graded JPEG to cache. The bytes written here are EXACTLY
+ * the bytes logged and uploaded — "baked at capture", on-device, no preset-id
+ * upload, no post-processing claim. The environment (back) shot is never
+ * filtered and never routed through this module.
  *
  * UI-layer only: LogSheet calls this right after capture; the lib workout
  * store never touches filters (photo isolation + smoke harness untouched).
