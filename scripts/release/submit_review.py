@@ -91,9 +91,6 @@ FORBIDDEN_PATH_PARTS = (
     "relationships/build",
 )
 
-Redactable = Any
-
-
 # --------------------------------------------------------------------------------------------- #
 # ASC transport (mirrors /home/team/.ios-creds/asc_api.py — kept local so the script is runnable
 # from the repo without importing a helper that lives outside it).
@@ -559,9 +556,9 @@ def main(argv: list[str] | None = None) -> int:
             do_set_demo_credentials(asc, args.backup)
         if args.submit_for_review:
             do_submit_for_review(asc, args.yes)
-        if args.verify or not action:
-            if not dry_run and (args.set_demo_credentials or args.submit_for_review):
-                print("\n--- verification ---")
+        if args.verify or not action or not dry_run:
+            if not dry_run:
+                print("\n--- verification (read-only) ---")
             return do_verify(asc)
         return 0
     except SystemExit as exc:
