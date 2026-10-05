@@ -198,6 +198,32 @@ export function weekStartFor(now: Date, weekStartDay: string): Date {
   return d;
 }
 
+/**
+ * Feed thumb captions — the two 9pt labels under a card's thumbnails.
+ *
+ * WHY THESE ARE DERIVED, NOT CONSTANTS (2026-10-05): the labels used to be
+ * hardcoded 'YOU' / 'YOUR SPOT' for EVERY log, so a co-member's card claimed to
+ * be you while the author name on the same card correctly showed their name. A
+ * thumb caption is a claim about WHO took the shot, so it is a function of
+ * whether the log is the viewer's own — exactly like the `isOwner` flag the
+ * card already computes for the owner-only "Remove photo" action.
+ *
+ * Copy note: 'THEM' / 'THEIR SPOT' is the honest counterpart of the viewer's own
+ * 'YOU' / 'YOUR SPOT' — same length, same register, and it does not repeat the
+ * author's name that renders at the top of the same card (so no card says the
+ * name twice). This is a copy decision the designer can revisit; the offline
+ * gate only requires that a co-member's card never claims YOU.
+ */
+export const FEED_THUMB_LABELS = {
+  mine: { self: 'YOU', spot: 'YOUR SPOT' },
+  coMember: { self: 'THEM', spot: 'THEIR SPOT' },
+} as const;
+
+/** The two thumb captions for a log: `isMine` = log.userId === the viewer's id. */
+export function feedThumbLabels(isMine: boolean): { self: string; spot: string } {
+  return isMine ? FEED_THUMB_LABELS.mine : FEED_THUMB_LABELS.coMember;
+}
+
 /** Relative timestamp per home-screen.md card anatomy: "Just now" / "2h" / "Mon 3:14p". */
 export function relativeLogTime(iso: string, now: Date): string {
   const t = new Date(iso);

@@ -25,7 +25,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { colors, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
-import { relativeLogTime, type WorkoutLog } from '@/lib/workouts';
+import { relativeLogTime, feedThumbLabels, type WorkoutLog } from '@/lib/workouts';
 import { useAuth } from '@/features/auth/AuthProvider';
 import { removeWorkout } from '@/lib/workoutStore';
 
@@ -45,13 +45,18 @@ export function FeedCard({ log, now }: { log: WorkoutLog; now: Date }) {
   const [removed, setRemoved] = useState(false);
 
   // Displayable shots in order: selfie first, then environment ('' = legacy).
+  // The captions are VIEWER-RELATIVE (2026-10-05): they used to be hardcoded
+  // 'YOU' / 'YOUR SPOT' for every log, so a co-member's card claimed to be you
+  // while `log.authorName` on the same card correctly showed their name. Same
+  // viewer test the owner-only "Remove photo" action below uses.
+  const isOwner = !!session && session.user.id === log.userId;
+  const thumbLabels = feedThumbLabels(isOwner);
   const shots: { uri: string; label: string; a11y: string }[] = [];
-  if (log.photoUri) shots.push({ uri: log.photoUri, label: 'YOU', a11y: 'View photo' });
-  if (log.photoEnvUri) shots.push({ uri: log.photoEnvUri, label: 'YOUR SPOT', a11y: 'View environment photo' });
+  if (log.photoUri) shots.push({ uri: log.photoUri, label: thumbLabels.self, a11y: 'View photo' });
+  if (log.photoEnvUri) shots.push({ uri: log.photoEnvUri, label: thumbLabels.spot, a11y: 'View environment photo' });
 
   const hasPhoto = shots.length > 0;
   const typeLabel = log.workoutType && log.workoutType.length > 0 ? log.workoutType : 'Workout';
-  const isOwner = !!session && session.user.id === log.userId;
 
   const openViewer = (index: number) => {
     setViewerIndex(index);
