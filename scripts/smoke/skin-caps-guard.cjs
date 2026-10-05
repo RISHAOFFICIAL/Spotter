@@ -628,10 +628,19 @@ record(
   `bakeSelfieFiltered call sites in LogSheet.tsx = ${bakeCalls}, at offset ${bakeCall}, before the environment-shot branch at ${envBranch}: the back shot is never routed through the bake`,
 );
 
+// The walk below stays inside `src/` and reads .ts/.tsx SOURCES only. This guard
+// deliberately reads NOTHING from the smoke harness's compiled-output directory
+// and never spawns the lib compiler: `loadAppModule()` transpiles
+// src/lib/filters.ts from the CURRENT bytes in-process and pins them with a
+// sha256, so it cannot assert against a stale artifact and needs no freshness
+// coupling. Loading from that directory here would create one — if you ever add
+// such a load, spawn scripts/smoke/compile.cjs first and test its exit status
+// (the rule compile-freshness-guard.cjs enforces in its check 13).
 const repoWideBakeCalls = [];
 (function walk(dir) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === '.compiled') continue;
+    // hidden directories are not source (and never browsed): skip them wholesale
+    if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
     const full = path.join(dir, entry.name);
     // selfieBake.ts DEFINES the function — the walk is looking for call sites.
     if (entry.isDirectory()) walk(full);
