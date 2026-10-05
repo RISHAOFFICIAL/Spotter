@@ -2,7 +2,9 @@
  * ProfileScreen — minimal real Profile surface (compliance brief #2 §4).
  *
  * The bottom-bar Profile slot is a dimmed placeholder in MVP; this route is
- * the honest, minimal surface behind it: account info + the in-app
+ * the honest, minimal surface behind it: account info + Sign out (owner
+ * directive 2026-10-05 — switch accounts without deleting and reinstalling, in
+ * the ACCOUNT card at the top, deliberately far from DANGER ZONE) + the in-app
  * "Delete account" flow (App Store 5.1.1(v)). Delete is NEVER a single tap:
  * it requires an explicit confirm dialog, then the real deletion runs against
  * the dev mock / forward-compatible real-mode stub (accountDeletion.ts), then
@@ -12,14 +14,25 @@
  * after the deletion actually completed — no fake delete.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/features/auth/AuthProvider';
+import { SIGNED_OUT_ROUTE } from '@/features/auth/RequireSession';
 import { AppButton, TextButton } from '@/components/AppButton';
 import { deleteAccount } from '@/lib/accountDeletion';
+import {
+  SIGN_OUT_CANCEL_ACTION,
+  SIGN_OUT_CAPTION,
+  SIGN_OUT_CONFIRM_ACTION,
+  SIGN_OUT_CONFIRM_BODY,
+  SIGN_OUT_CONFIRM_TITLE,
+  SIGN_OUT_CONTROL_LABEL,
+  SIGN_OUT_FAILED_MESSAGE,
+} from '@/lib/accountCopy';
+import { getStoredSession } from '@/lib/supabase';
 import { leaveGroup } from '@/lib/invites';
 import { getPetNames, setPetNameFor, setTeamName } from '@/lib/naming';
 import { getMissPromise, setMissNote, getMissWitnessId, MISS_PROMISE_MAX } from '@/lib/missPromise';
@@ -51,6 +64,17 @@ export function ProfileScreen() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+
+  // Sign out (owner directive 2026-10-05: switch accounts without deleting and
+  // reinstalling). `mountedRef` is the flag EVERY async continuation on this
+  // screen checks before writing state: signing out tears the screen down while
+  // a read or a write can still be in flight (the root Gate swaps the Stack the
+  // moment the session clears), and a write onto a screen that is gone is a
+  // real defect even though React 18/19 makes it a silent no-op. On a mounted
+  // screen it is always true, so no visible behaviour depends on it.
+  const [signOutBusy, setSignOutBusy] = useState(false);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
 
   const email = session?.user.email ?? profile?.email ?? '';
   const name = profile?.name ?? email.split('@')[0] ?? '';
@@ -101,6 +125,7 @@ export function ProfileScreen() {
       getMissWitnessId(),
       getOpenPromiseCount(),
     ]);
+    if (!mountedRef.current) return;
     setOpenPromiseCount(count);
     setMissWitness(witness);
     if (!ctx.ok || !ctx.context) return;
@@ -112,7 +137,7 @@ export function ProfileScreen() {
   };
 
   useEffect(() => {
-    let mounted = true;
+    mountedRef.current = true;
     (async () => {
       const [ctx, petMap, miss, witness, count] = await Promise.all([
         fetchWeeklyContext(),
@@ -121,7 +146,7 @@ export function ProfileScreen() {
         getMissWitnessId(),
         getOpenPromiseCount(),
       ]);
-      if (!mounted) return;
+      if (!mountedRef.current) return;
       setOpenPromiseCount(count);
       setMissWitness(witness);
       if (ctx.ok && ctx.context) {
@@ -135,11 +160,11 @@ export function ProfileScreen() {
     // Notification prefs load (v1.1 Build #3): independent of pairing — the
     // toggles mirror the schema defaults even before a row exists.
     void getNotificationPrefs().then((prefs) => {
-      if (!mounted) return;
+      if (!mountedRef.current) return;
       setNotifPrefs(prefs);
     });
     return () => {
-      mounted = false;
+      mountedRef.current = false;
       if (confirmTimer.current) clearTimeout(confirmTimer.current);
     };
   }, []);
@@ -156,6 +181,7 @@ export function ProfileScreen() {
       await setPetNameFor(m.id, petNames[m.id] ?? '');
     }
     const teamRes = await setTeamName(teamNameValue);
+    if (!mountedRef.current) return;
     setNamingBusy(false);
     setMessage(teamRes.ok ? 'Saved.' : (teamRes.error ?? 'Saved.'));
   };
@@ -175,6 +201,7 @@ export function ProfileScreen() {
     setMissPromiseBusy(true);
     setMessage(null);
     const res = await setMissNote(text, trimmed ? (members.length >= 2 ? missWitness : null) : null);
+    if (!mountedRef.current) return;
     if (res.ok) {
       setMissPromiseValue(text);
       setMissWitness(res.witnessId ?? null);
@@ -195,6 +222,7 @@ export function ProfileScreen() {
     const next = { ...notifPrefs, [type]: enabled };
     setNotifPrefs(next);
     const res = await setNotificationPref(type, enabled);
+    if (!mountedRef.current) return;
     setNotifBusy(false);
     if (!res.ok) {
       // Restore the prior truthful value + surface the failure.
@@ -222,6 +250,7 @@ export function ProfileScreen() {
     setLeaveBusy(true);
     setMessage(null);
     const res = await leaveGroup();
+    if (!mountedRef.current) return;
     setLeaveBusy(false);
     if (res.ok) {
       setMessage('You left the group. You can join or start another anytime.');
@@ -231,6 +260,58 @@ export function ProfileScreen() {
     } else {
       setMessage(res.error ?? 'Couldn\u2019t leave the group. Try again.');
     }
+  };
+
+  // ---------------------------------------------------------------------
+  // Sign out (owner directive 2026-10-05). Two steps, never one tap:
+  //   1. requestSignOut  — raises the iOS-standard confirm (Cancel first, and
+  //      styled cancel, so a stray tap on the sheet cannot sign anyone out);
+  //   2. runSignOut      — clears the session, then PROVES it is gone before
+  //      routing to the signed-out route the session gate itself uses.
+  //
+  // Why the proof matters (never a silent no-op): AuthProvider.signOut() is
+  // `Promise<void>` — it cannot report failure. Offline, `clearSession()` can
+  // throw on SecureStore, or the stored session can survive the call. So this
+  // re-reads the stored session and treats "still there" as a failure: the
+  // error is rendered where the control is, the control comes back enabled, and
+  // the user is NOT routed away as though it had worked.
+  //
+  // The next account can never see this account's data: clearing the session
+  // makes the root Gate swap the Stack, which unmounts this screen (and Home,
+  // and the feed) outright — there is no cached user data in a module-scope
+  // store to leak, and every read is RLS-scoped to the new session's uid.
+  // ---------------------------------------------------------------------
+  const requestSignOut = () => {
+    if (signOutBusy) return;
+    setSignOutError(null);
+    Alert.alert(SIGN_OUT_CONFIRM_TITLE, SIGN_OUT_CONFIRM_BODY, [
+      { text: SIGN_OUT_CANCEL_ACTION, style: 'cancel' },
+      // Returns the promise on purpose: the OS ignores an alert button's return
+      // value, and the offline gate awaits the same call the OS would drop.
+      { text: SIGN_OUT_CONFIRM_ACTION, style: 'destructive', onPress: () => runSignOut() },
+    ]);
+  };
+
+  const runSignOut = async () => {
+    if (signOutBusy) return;
+    setSignOutBusy(true);
+    setSignOutError(null);
+    let failed = false;
+    try {
+      await signOut();
+      // Truthful check, not a formality: is the session actually gone?
+      failed = !!(await getStoredSession());
+    } catch {
+      failed = true;
+    }
+    if (!mountedRef.current) return;
+    setSignOutBusy(false);
+    if (failed) {
+      setSignOutError(SIGN_OUT_FAILED_MESSAGE);
+      return;
+    }
+    // Same destination the session gate sends a signed-out user to.
+    router.replace(SIGNED_OUT_ROUTE);
   };
 
   const runDelete = async () => {
@@ -277,6 +358,37 @@ export function ProfileScreen() {
           <Text style={[textStyles.caption.style, { color: colors.text.secondary.hex }]} numberOfLines={1} ellipsizeMode="tail">
             {email}
           </Text>
+
+          {/* Sign out (owner directive 2026-10-05) — lives in ACCOUNT, at the
+              TOP of the screen: the recoverable account action sits with the
+              account, and nowhere near DANGER ZONE's "Delete account" at the
+              bottom, so the two can never be confused. Row ink is
+              text.primary/text.secondary — volt is a fill, never an ink
+              (PR #49); nothing here is red or destructive-looking. */}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={SIGN_OUT_CONTROL_LABEL}
+            onPress={requestSignOut}
+            disabled={signOutBusy}
+            hitSlop={6}
+            style={({ pressed }) => [styles.signOutRow, pressed && !signOutBusy && { opacity: 0.7 }]}
+          >
+            <Ionicons name="log-out-outline" size={18} color={colors.text.secondary.hex} />
+            <Text style={[textStyles.bodyStrong.style, { color: colors.text.primary.hex, flex: 1 }]}>
+              {SIGN_OUT_CONTROL_LABEL}
+            </Text>
+            {signOutBusy ? (
+              <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>…</Text>
+            ) : (
+              <Ionicons name="chevron-forward" size={16} color={colors.text.muted.hex} />
+            )}
+          </Pressable>
+          <Text style={[textStyles.caption.style, { color: colors.text.muted.hex }]}>{SIGN_OUT_CAPTION}</Text>
+          {/* Honest failure: a sign-out that did not happen says so, right where
+              the control is, and the control stays usable for a retry. */}
+          {signOutError && (
+            <Text style={[textStyles.caption.style, { color: colors.text.danger.hex }]}>{signOutError}</Text>
+          )}
         </View>
 
         {/* Group (groups-copy-spec §4) — section header "GROUP" matches "ACCOUNT"; the
@@ -592,6 +704,18 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   dangerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  // Sign out row (ACCOUNT card): a plain, non-destructive row — the same
+  // anatomy as dangerRow with text.secondary glyph/text.primary label ink, and a
+  // hairline above it so it reads as a separate action from the account info.
+  signOutRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0,0,0,0.08)',
+  },
   unpairRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.md },
   missRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, marginTop: spacing.sm },
   witnessRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.sm, paddingVertical: spacing.xs },
