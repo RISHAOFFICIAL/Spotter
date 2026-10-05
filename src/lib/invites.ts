@@ -375,10 +375,17 @@ export async function leaveGroup(): Promise<UnpairResult> {
   return { ok: true };
 }
 
-/** Human message template for the share sheet (invite-flow.md §1, one line). */
+/**
+ * Human message template for the share sheet (invite-flow.md §1, one line).
+ *
+ * The invite code is interpolated INSIDE the closing sentence — it is how the
+ * recipient joins — so the sentence only reads right with a code in it: with no
+ * code the ask drops "with code" and still ends as a complete sentence.
+ * Copy decided by the owner 2026-10-05; keep it plain ASCII (GSM-7) and one line.
+ */
 export function inviteMessageTemplate(code: string): string {
-  const part = code ? ` Code: ${code}` : '';
-  return `I'm in SPOTTER — work out together, each of us logs photo proof, the ring fills. Join me.${part}`;
+  const body = "Want to try SPOTTER with me? We each take a quick live-camera photo that shows us and where we worked out, and each fill our own weekly ring. It's a simple way to keep each other accountable even when we train apart. Download it and join my group";
+  return code ? `${body} with code ${code}.` : `${body}.`;
 }
 
 export type { DevInvite };
