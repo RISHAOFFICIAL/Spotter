@@ -483,7 +483,7 @@ export function LogSheet({ visible, onClose, onLogged, partnerName }: Props) {
                 accessibilityLabel="Caption"
                 value={caption}
                 onChangeText={setCaption}
-                placeholder="How\u2019d it go?"
+                placeholder="How’d it go?"
                 placeholderTextColor={colors.text.muted.hex}
                 maxLength={CAPTION_MAX}
                 style={styles.captionInput}

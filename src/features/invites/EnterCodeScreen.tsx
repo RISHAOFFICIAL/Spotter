@@ -190,7 +190,7 @@ export function EnterCodeScreen() {
           <>
             <Text style={[textStyles.display.style, styles.headline]}>Join a group</Text>
             <Text style={[textStyles.body.style, styles.subhead]}>
-              Enter the code they shared. You\u2019ll see each other\u2019s photo-proof logs after you join.
+              Enter the code they shared. You’ll see each other’s photo-proof logs after you join.
             </Text>
             <TextInput
               value={code}
@@ -209,7 +209,7 @@ export function EnterCodeScreen() {
             {error && <Text style={[textStyles.caption.style, { color: colors.text.danger.hex, textAlign: 'center' }]}>{error}</Text>}
             <AppButton label="Look up code" onPress={() => void resolve(code)} disabled={normalizeInviteCode(code).length < 8} loading={busy} />
             <View style={styles.soloRow}>
-              <TextButton label="Just look around — I\u2019ll join later" onPress={() => router.replace('/(home)/(tabs)')} color={colors.text.muted.hex} />
+              <TextButton label="Just look around — I’ll join later" onPress={() => router.replace('/(home)/(tabs)')} color={colors.text.muted.hex} />
             </View>
           </>
         )}
@@ -230,13 +230,13 @@ export function EnterCodeScreen() {
                 : `Start a group with ${info.inviterName}`}
             </Text>
             <Text style={[textStyles.body.style, styles.subhead]}>
-              Everyone in the group sees each other\u2019s photo-proof logs. Your weekly ring counts only your workouts — theirs counts only theirs.
+              Everyone in the group sees each other’s photo-proof logs. Your weekly ring counts only your workouts — theirs counts only theirs.
             </Text>
             <View style={styles.privacyRow}>
               {/* volt is a fill, never an ink — a ✓ as ink measured 1.19:1. */}
               <Text style={{ fontSize: 14, color: colors.text.muted.hex }}>✓</Text>
               <Text style={[textStyles.caption.style, styles.privacy]}>
-                Photos stay sealed per person — group members see each other\u2019s, never anyone else\u2019s.
+                Photos stay sealed per person — group members see each other’s, never anyone else’s.
               </Text>
             </View>
 
