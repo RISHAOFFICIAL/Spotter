@@ -18,9 +18,16 @@
  * the step skippable: camera hides, the Settings escape hatch is a real
  * control (OpenSettingsButton), preview frame + Next remain.
  *
- * Filters: the SELFIE_FILTER_* chip row + live tint from src/lib/filters.ts
- * are reused on the selfie stage as a LIVE PREVIEW ONLY — no bake, no upload
+ * Filters: the two SELFIE chip rows (LOOK + SKIN) from src/lib/filters.ts are
+ * reused on the selfie stage as a LIVE PREVIEW ONLY — no bake, no upload
  * (lead's S4b-2 brief; the real bake path lives in LogSheet/selfieBake).
+ * PARITY BY CONSTRUCTION: the rows come from SELFIE_FILTER_FAMILIES, so this
+ * surface can never drift from the log sheet's set. The one asymmetry is
+ * deliberate and honest: a SKIN enhancement shows a chip + the disclosure here
+ * but NO live tint (its grade is mask-conditioned, so there is nothing honest to
+ * draw over the viewfinder), and no "your group sees this" line either —
+ * practice posts nothing, so that sentence would be false on this surface.
+ * The disclosure still teaches the whole truth about the family.
  *
  * Layout: the preview frame (mock feed card + real empty WeeklyRing) and the
  * stakes/nudge line render on the ask / denied / review surfaces. During
@@ -62,10 +69,12 @@ import { WeeklyRing } from '@/features/home/WeeklyRing';
 import { colors, icons, radius, spacing } from '@/theme/tokens';
 import { textStyles } from '@/theme/typography';
 import {
+  SELFIE_ENHANCEMENT_DISCLOSURE,
+  SELFIE_FILTER_FAMILIES,
   SELFIE_FILTER_HELPER,
-  SELFIE_FILTER_IDS,
   SELFIE_FILTER_PRESETS,
   filterA11yLabel,
+  isEnhancementFilter,
   type SelfieFilter,
 } from '@/lib/filters';
 
@@ -357,42 +366,60 @@ export function PracticeCamStep({ onNext, onSkip }: { onNext: () => void; onSkip
             {/* Filter chip row — selfie stage only, above the shutter bar. */}
             {stage === 'shot1' && (
               <View style={styles.filterBar}>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.filterRow}
-                  keyboardShouldPersistTaps="handled"
-                >
-                  {SELFIE_FILTER_IDS.map((f) => {
-                    const selected = filter === f;
-                    return (
-                      <Pressable
-                        key={f}
-                        accessibilityRole="button"
-                        accessibilityLabel={filterA11yLabel(f)}
-                        accessibilityState={{ selected }}
-                        onPress={() => setFilter(f)}
-                        style={({ pressed }) => [
-                          styles.chip,
-                          selected && styles.chipSelected,
-                          pressed && { opacity: 0.85 },
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            textStyles.captionStrong.style,
-                            { color: selected ? colors.text.onVolt.hex : colors.text.primary.hex },
-                          ]}
-                        >
-                          {SELFIE_FILTER_PRESETS[f].label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </ScrollView>
-                <Text style={[textStyles.caption.style, styles.filterHelper]}>
-                  {SELFIE_FILTER_HELPER}
-                </Text>
+                {SELFIE_FILTER_FAMILIES.map((family, familyIndex) => (
+                  <View key={family.family} style={familyIndex > 0 ? styles.filterFamilySpaced : undefined}>
+                    {familyIndex > 0 && <View style={styles.filterFamilyRule} />}
+                    <Text style={[textStyles.label.style, styles.filterFamilyLabel]}>
+                      {family.label}
+                    </Text>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.filterRow}
+                      keyboardShouldPersistTaps="handled"
+                    >
+                      {family.ids.map((f) => {
+                        const selected = filter === f;
+                        // Same model as the log sheet: one `filter` value across
+                        // both rows, and the SKIN row clears on a second tap
+                        // because it has no 'None' chip of its own.
+                        const clearable = family.family === 'skin';
+                        return (
+                          <Pressable
+                            key={f}
+                            accessibilityRole="button"
+                            accessibilityLabel={filterA11yLabel(f)}
+                            accessibilityState={{ selected }}
+                            onPress={() => setFilter(clearable && selected ? 'none' : f)}
+                            style={({ pressed }) => [
+                              styles.chip,
+                              selected && styles.chipSelected,
+                              pressed && { opacity: 0.85 },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                textStyles.captionStrong.style,
+                                { color: selected ? colors.text.onVolt.hex : colors.text.primary.hex },
+                              ]}
+                            >
+                              {SELFIE_FILTER_PRESETS[f].label}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </ScrollView>
+                    {family.family === 'skin' && isEnhancementFilter(filter) ? (
+                      <Text style={[textStyles.caption.style, styles.filterHelper]}>
+                        {SELFIE_ENHANCEMENT_DISCLOSURE}
+                      </Text>
+                    ) : family.family === 'look' ? (
+                      <Text style={[textStyles.caption.style, styles.filterHelper]}>
+                        {SELFIE_FILTER_HELPER}
+                      </Text>
+                    ) : null}
+                  </View>
+                ))}
               </View>
             )}
 
@@ -670,6 +697,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
   },
   filterRow: { gap: spacing.sm, paddingBottom: spacing.xs },
+  /** Hairline + breathing room between the LOOK row and the SKIN row. */
+  filterFamilySpaced: { marginTop: spacing.sm },
+  filterFamilyRule: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0,0,0,0.08)',
+    marginBottom: spacing.sm,
+  },
+  filterFamilyLabel: { color: colors.text.muted.hex, marginBottom: spacing.xs },
   filterHelper: {
     color: colors.text.muted.hex,
     textAlign: 'center',

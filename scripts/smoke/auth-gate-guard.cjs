@@ -733,8 +733,20 @@ function surfacesLoader() {
       '@/lib/filters': {
         SELFIE_FILTER_HELPER: 'Color only. No reshaping, ever.',
         SELFIE_FILTER_IDS: ['none'],
-        SELFIE_FILTER_PRESETS: { none: { label: 'None', previewTint: null, curve: [] } },
+        // The SKIN family (2026-10-05) — the stubbed row must expose the same
+        // exports the real module does, or the screens under test throw on a
+        // missing name instead of testing what this guard is about.
+        SELFIE_ENHANCEMENT_IDS: [],
+        SELFIE_ENHANCEMENT_DISCLOSURE: 'On your phone, selfie only.',
+        SELFIE_REVIEW_HONESTY_LINE: 'This is exactly what your group sees.',
+        SELFIE_FILTER_FAMILY_LABELS: { look: 'LOOK', skin: 'SKIN' },
+        SELFIE_FILTER_FAMILIES: [
+          { family: 'look', label: 'LOOK', ids: ['none'] },
+          { family: 'skin', label: 'SKIN', ids: [] },
+        ],
+        SELFIE_FILTER_PRESETS: { none: { id: 'none', family: 'look', label: 'None', previewTint: null, curve: [] } },
         filterA11yLabel: (id) => `Filter ${id}`,
+        isEnhancementFilter: () => false,
       },
       '@/lib/workoutStore': { logWorkout: async () => ({ ok: false }) },
       '@/lib/selfieBake': { bakeSelfieFiltered: async () => ({ ok: false, error: 'no' }) },
