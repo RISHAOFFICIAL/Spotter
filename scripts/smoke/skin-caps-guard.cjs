@@ -702,6 +702,494 @@ for (const rel of ['src/features/logging/LogSheet.tsx', 'src/features/onboarding
   );
 }
 
+// ---------------------------------------------------------------------------
+// CONSENT — the owner's two promises about the enhancement, gated on the
+// RENDERED tree of the real LogSheet (not on source text)
+// ---------------------------------------------------------------------------
+// WHY RENDERED AND NOT GREPPED. `beauty-mode-scope-2026-10-05.md` §68 makes two
+// promises about the enhancement's consent shape:
+//   "Default state. Off, always, and NEVER STICKY ... No persistence of the
+//    choice, no remote flag, no 'remember my look', no auto-apply."
+//   §72: "A one-time, INLINE, NON-MODAL disclosure on first tap of an
+//    enhancement chip (not a sheet ...)".
+// Both are ELEMENT-TREE facts and both are invisible to a source grep: a grep
+// for `useState('none')` passes on a tree whose effect then seeds that state
+// from a stored value, and a grep for the disclosure string passes on a tree
+// that renders it inside its own <Modal>. So this section MOUNTS the real
+// src/features/logging/LogSheet.tsx in plain Node (leaf stubs only, a mini hook
+// runtime with DEP-AWARE effects, no reconciler, no Metro, no device — same
+// technique as scripts/smoke/signout-feed-labels-guard.cjs and
+// scripts/smoke/bottom-bar-guard.cjs) and asserts on the tree that ships.
+//
+// The dep-aware effect is load-bearing: it is what turns "never sticky" into a
+// real open → choose → close → reopen sequence instead of a restatement of the
+// declaration. Source text is read ONLY for the two DECLARATION facts that the
+// tree cannot show (the reset that makes the reopen work, and the absence of any
+// persistence API) — and each of those has a mutated-source negative control.
+//
+// NEGATIVE CONTROLS, both shapes, so a green run means something:
+//   • in-file: hand-built trees that DO persist the choice and DO wrap the
+//     disclosure in its own Modal, pushed through the SAME analysers — which
+//     must report them as sticky / not-inline;
+//   • end-to-end: the real source is mutated four ways (default 'glow'; state
+//     seeded from storage; the disclosure wrapped in its own Modal; the reset
+//     removed) and this guard must exit 1 on each. Raw output is recorded in
+//     /home/team/shared/beauty-consent-gate-2026-10-05.md.
+//
+// WHAT THIS STILL CANNOT SEE (stated so a green run is not read as more): that
+// the line is legible on a real screen, and that no native layer misbehaves.
+// Those are device checks.
+const React = require('react');
+const CONSENT_LIB = {};
+(function buildConsentHarness() {
+  const MountReact = React;
+  const consStores = new Map();
+  let consCurrent = null;
+  let consQueue = [];
+  let consInPass = false;
+  let consNeedRerender = false;
+  let consRerender = () => {};
+
+  function storeFor(key) {
+    let s = consStores.get(key);
+    if (!s) {
+      s = { key, hooks: [], slots: [], cleanups: [], cursor: 0 };
+      consStores.set(key, s);
+    }
+    return s;
+  }
+  function useStore(what) {
+    if (!consCurrent) throw new Error(`${what} called outside a render`);
+    return consCurrent;
+  }
+  function requestRender() {
+    if (consInPass) { consNeedRerender = true; return; }
+    consRerender();
+  }
+  const sameDeps = (a, b) => !!a && !!b && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
+  const ConsentHooks = {
+    useState(init) {
+      const s = useStore('useState');
+      const i = s.cursor++;
+      if (!(i in s.hooks)) s.hooks[i] = typeof init === 'function' ? init() : init;
+      const set = (value) => {
+        const cur = s.hooks[i];
+        const next = typeof value === 'function' ? value(cur) : value;
+        if (Object.is(next, cur)) return;
+        s.hooks[i] = next;
+        requestRender();
+      };
+      return [s.hooks[i], set];
+    },
+    useRef(init) { const s = useStore('useRef'); const i = s.cursor++; if (!(i in s.hooks)) s.hooks[i] = { current: init }; return s.hooks[i]; },
+    useMemo(fn) { useStore('useMemo').cursor += 1; return fn(); },
+    useCallback(fn) { useStore('useCallback').cursor += 1; return fn; },
+    useEffect(fn, deps) {
+      const s = useStore('useEffect');
+      const i = s.cursor++;
+      const prev = s.slots[i];
+      const dirty = !prev || !sameDeps(prev.deps, deps);
+      s.slots[i] = { fn, deps, dirty: dirty || (prev ? prev.dirty : false) };
+    },
+  };
+  ConsentHooks.useLayoutEffect = ConsentHooks.useEffect;
+
+  const CONSENT_ALERTS = [];
+  function consentReactStub() {
+    const stub = { __esModule: true };
+    for (const k of Object.keys(MountReact)) stub[k] = MountReact[k];
+    stub.default = stub;
+    stub.useState = ConsentHooks.useState;
+    stub.useRef = ConsentHooks.useRef;
+    stub.useMemo = ConsentHooks.useMemo;
+    stub.useCallback = ConsentHooks.useCallback;
+    stub.useEffect = ConsentHooks.useEffect;
+    stub.useLayoutEffect = ConsentHooks.useEffect;
+    return stub;
+  }
+  function consName(type) { return typeof type === 'string' ? type : (type && type.name) || 'component'; }
+
+  function expandOne(node, p) {
+    if (node === null || node === undefined || typeof node === 'boolean') return node;
+    if (Array.isArray(node)) return node.map((c, i) => expandOne(c, `${p}.${i}`));
+    if (!MountReact.isValidElement(node)) return node;
+    const { type, props } = node;
+    if (typeof type === 'string') {
+      if (props.children === undefined) return node;
+      return MountReact.cloneElement(node, {}, expandChildren(props.children, p));
+    }
+    if (type === MountReact.Fragment) return MountReact.cloneElement(node, {}, expandChildren(props.children, p));
+    if (typeof type === 'function') {
+      if (type.prototype && type.prototype.isReactComponent) {
+        const inst = new type(props);
+        inst.props = props;
+        if (!inst.state) inst.state = {};
+        return expandOne(inst.render(), `${p}|${type.name}out`);
+      }
+      const s = storeFor(`${p}|${consName(type)}`);
+      s.rerender = requestRender;
+      const previous = consCurrent;
+      consCurrent = s;
+      s.cursor = 0;
+      let out;
+      try { out = type(props); } finally { consCurrent = previous; }
+      consQueue.push(s);
+      return expandOne(out, `${p}|${consName(type)}out`);
+    }
+    return node;
+  }
+  function expandChildren(children, p) {
+    return MountReact.Children.toArray(children).map((c, i) => expandOne(c, `${p}.${i}`));
+  }
+  function flushConsentEffects() {
+    const q = consQueue.slice();
+    consQueue = [];
+    for (const s of q) {
+      for (const slot of s.slots) {
+        if (!slot || !slot.dirty) continue;
+        slot.dirty = false;
+        const cleanup = slot.fn();
+        if (typeof cleanup === 'function') s.cleanups.push(cleanup);
+      }
+    }
+  }
+  /** Mount a component with a live props object — `render({visible:false})` then
+   *  `render({visible:true})` is a real close-and-reopen, not a fresh mount. */
+  function mountTree(Component, initialProps) {
+    consStores.clear();
+    const api = {
+      props: initialProps,
+      tree: null,
+      renders: 0,
+      render(newProps) {
+        if (newProps) api.props = Object.assign({}, api.props, newProps);
+        for (let pass = 0; pass < 12; pass++) {
+          consNeedRerender = false;
+          consInPass = true;
+          consQueue = [];
+          const s = storeFor('root');
+          const previous = consCurrent;
+          consCurrent = s;
+          s.cursor = 0;
+          let out;
+          try { out = Component(api.props); } finally { consCurrent = previous; }
+          api.renders += 1;
+          // PASS 0 is the render BEFORE any effect has run — the frame the user
+          // actually sees when the sheet opens. A useState initialiser of 'glow'
+          // would flash the enhancement on before the reset effect corrected it,
+          // so the default-off check reads this frame, not only the settled one.
+          if (pass === 0) api.firstTree = out;
+          consQueue.push(s);
+          flushConsentEffects();
+          consInPass = false;
+          api.tree = out;
+          if (!consNeedRerender) break;
+        }
+        return api.tree;
+      },
+    };
+    consRerender = () => api.render();
+    api.render(initialProps);
+    return api;
+  }
+
+  // ---- module loading: REAL .tsx/.ts sources, leaf deps stubbed -------------
+  function transpileForMount(file) {
+    const src = CONSENT_LIB.overrides && CONSENT_LIB.overrides.has(file)
+      ? CONSENT_LIB.overrides.get(file)
+      : fs.readFileSync(file, 'utf8');
+    return ts.transpileModule(src, {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2020,
+        esModuleInterop: true,
+        jsx: ts.JsxEmit.ReactJSX,
+      },
+      fileName: file,
+    }).outputText;
+  }
+  const consCache = new Map();
+  function resolveSource(fromFile, id) {
+    let base;
+    if (id.startsWith('@/')) base = path.join(ROOT, 'src', id.slice(2));
+    else if (id.startsWith('.')) base = path.resolve(path.dirname(fromFile), id);
+    else return null;
+    for (const ext of ['.tsx', '.ts', '.jsx', '.js', '/index.tsx', '/index.ts']) {
+      const f = base + ext;
+      if (fs.existsSync(f) && fs.statSync(f).isFile()) return f;
+    }
+    if (fs.existsSync(base) && fs.statSync(base).isFile()) return base;
+    return null;
+  }
+  CONSENT_LIB.overrides = new Map();
+  function loadSource(file) {
+    if (consCache.has(file)) return consCache.get(file);
+    const mod = { exports: {} };
+    consCache.set(file, mod.exports);
+    const fn = new Function('require', 'module', 'exports', '__filename', '__dirname', transpileForMount(file));
+    const req = (id) => {
+      if (Object.prototype.hasOwnProperty.call(consStubs, id)) return consStubs[id];
+      if (/\.(png|jpe?g|svg|ttf)$/i.test(id)) return {};
+      const f = resolveSource(file, id);
+      if (f) return loadSource(f);
+      // a real npm package (jpeg-js is filters.ts's only bare import)
+      return require(require.resolve(id, { paths: [path.dirname(file), ROOT, path.join(ROOT, 'node_modules')] }));
+    };
+    fn(req, mod, mod.exports, file, path.dirname(file));
+    consCache.set(file, mod.exports);
+    return mod.exports;
+  }
+  const consStubs = {
+    react: consentReactStub(),
+    'react/jsx-runtime': require('react/jsx-runtime'),
+    'react-native': {
+      View: 'View', Text: 'Text', Pressable: 'Pressable', ScrollView: 'ScrollView',
+      TextInput: 'TextInput', Modal: 'Modal', Image: 'Image', Switch: 'Switch',
+      ActivityIndicator: 'ActivityIndicator',
+      Platform: { OS: 'ios', select: (o) => (o && o.ios) || undefined },
+      StyleSheet: { create: (s) => s, flatten: (s) => s },
+      Dimensions: { get: () => ({ width: 390, height: 844 }) },
+      Linking: { openSettings: () => Promise.resolve() },
+      // A consent disclosure behind an Alert is exactly the "modal" shape this
+      // section refuses — record every alert so a check can see it.
+      Alert: { alert: (...args) => { CONSENT_ALERTS.push(args); } },
+    },
+    'react-native-safe-area-context': {
+      useSafeAreaInsets: () => ({ top: 47, bottom: 34, left: 0, right: 0 }),
+      SafeAreaView: 'SafeAreaView',
+    },
+    'expo-camera': {
+      CameraView: (props) => MountReact.createElement('CameraView', props),
+      useCameraPermissions: () => [{ granted: true, canAskAgain: true }, async () => ({ granted: true })],
+    },
+    '@expo/vector-icons': { Ionicons: (props) => MountReact.createElement('Ionicons', props) },
+    'expo-image': { Image: (props) => MountReact.createElement('ExpoImage', props) },
+    '@/lib/selfieBake': { bakeSelfieFiltered: async () => ({ ok: true, uri: 'file:///baked.jpg' }) },
+    '@/lib/workoutStore': { logWorkout: async () => ({ ok: true, log: null }) },
+  };
+
+  // ---- tree readers (pure, shared by the real mount and the controls) -------
+  function collect(node, parents, out) {
+    if (node === null || node === undefined || typeof node === 'boolean') return;
+    if (Array.isArray(node)) { for (const c of node) collect(c, parents, out); return; }
+    if (!MountReact.isValidElement(node)) return;
+    out.push({ node, parents });
+    collect(node.props ? node.props.children : undefined, parents.concat([node]), out);
+  }
+  function allNodes(tree) {
+    const out = [];
+    collect(tree, [], out);
+    return out;
+  }
+  /** The element's OWN string children, joined — the shape a JSX text child has
+   *  in this harness (a single string, or a one-element array of it). */
+  function ownText(node) {
+    const kids = node.props ? node.props.children : undefined;
+    if (typeof kids === 'string') return kids;
+    if (typeof kids === 'number') return String(kids);
+    if (Array.isArray(kids) && kids.every((k) => typeof k === 'string' || typeof k === 'number')) return kids.join('');
+    return null;
+  }
+  function labelOf(node) {
+    return node.props && typeof node.props.accessibilityLabel === 'string' ? node.props.accessibilityLabel : null;
+  }
+  /** Every chip the tree reports as SELECTED, in tree order. */
+  function selectedChips(tree) {
+    return allNodes(tree)
+      .filter((h) => h.node.props && h.node.props.accessibilityState && h.node.props.accessibilityState.selected === true && labelOf(h.node))
+      .map((h) => labelOf(h.node));
+  }
+  function pressableByLabel(tree, label) {
+    const hit = allNodes(tree).find((h) => labelOf(h.node) === label && typeof h.node.props.onPress === 'function');
+    return hit ? hit.node : null;
+  }
+  function textNodes(tree, text) {
+    return allNodes(tree).filter((h) => ownText(h.node) === text);
+  }
+  /** Types of the ancestors of a hit, outermost first (host names; a component
+   *  that was not expanded shows as 'component'). */
+  function ancestorTypes(hit) {
+    return hit.parents.map((p) => consName(p.type));
+  }
+  /** The disclosure is INLINE (the memo's word) when: it is drawn by a plain
+   *  <Text>; its immediate container is the SAME family block that directly
+   *  holds the SKIN chip row; and no second Modal sits between it and that
+   *  container — the only Modal on the path may be the log sheet's own root. */
+  function disclosurePlacement(tree, text, skinChipLabels) {
+    const hits = textNodes(tree, text);
+    if (hits.length !== 1) return { ok: false, found: hits.length, why: `${hits.length} node(s) carry the disclosure text (want exactly 1)` };
+    const hit = hits[0];
+    const types = ancestorTypes(hit);
+    if (consName(hit.node.type) !== 'Text') return { ok: false, found: 1, why: `drawn by <${consName(hit.node.type)}>, not <Text>` };
+    const modals = types.filter((t) => t === 'Modal');
+    if (modals.length !== 1 || types[0] !== 'Modal') {
+      return { ok: false, found: 1, why: `ancestors [${types.join(' < ')}] — ${modals.length} Modal(s), outermost ${types[0] || 'none'} (want exactly 1: the sheet's own root Modal, nothing in between)` };
+    }
+    const container = hit.parents[hit.parents.length - 1];
+    if (!container) return { ok: false, found: 1, why: 'the disclosure IS the root element' };
+    const inlineWith = MountReact.Children.toArray(container.props && container.props.children)
+      .filter((kid) => MountReact.isValidElement(kid) && kid.type === 'ScrollView')
+      .filter((scroll) => allNodes(scroll).some((h) => skinChipLabels.includes(labelOf(h.node))));
+    if (inlineWith.length === 0) {
+      return { ok: false, found: 1, why: `its container <${consName(container.type)}> does not directly hold the SKIN chip row — the disclosure is not inline with the row it explains` };
+    }
+    return { ok: true, found: 1, why: `drawn by <Text> inside <${consName(container.type)}>, the same block that directly holds the SKIN chip row; ancestors [${types.join(' < ')}]` };
+  }
+  CONSENT_LIB.MountReact = MountReact;
+  CONSENT_LIB.Hooks = ConsentHooks;
+  CONSENT_LIB.mountTree = mountTree;
+  CONSENT_LIB.loadSource = loadSource;
+  CONSENT_LIB.allNodes = allNodes;
+  CONSENT_LIB.selectedChips = selectedChips;
+  CONSENT_LIB.pressableByLabel = pressableByLabel;
+  CONSENT_LIB.textNodes = textNodes;
+  CONSENT_LIB.ownText = ownText;
+  CONSENT_LIB.labelOf = labelOf;
+  CONSENT_LIB.disclosurePlacement = disclosurePlacement;
+  CONSENT_LIB.alerts = CONSENT_ALERTS;
+})();
+
+const LOG_SHEET = path.join(ROOT, 'src', 'features', 'logging', 'LogSheet.tsx');
+const DISCLOSURE = F.SELFIE_ENHANCEMENT_DISCLOSURE;
+const LOOK_HELPER = F.SELFIE_FILTER_HELPER;
+const NONE_CHIP = F.filterA11yLabel('none');
+const SKIN_FAMILY = F.SELFIE_FILTER_FAMILIES.find((fam) => fam.family === 'skin') || { ids: [] };
+const SKIN_CHIP_LABELS = SKIN_FAMILY.ids.map((id) => F.filterA11yLabel(id));
+const FIRST_ENHANCEMENT = SKIN_FAMILY.ids[0];
+const ENHANCEMENT_CHIP = F.filterA11yLabel(FIRST_ENHANCEMENT);
+
+/** Mount the real LogSheet, run the open → choose → close → reopen sequence,
+ *  and report the facts the checks below assert on. Wrapped so a load failure
+ *  FAILs the consent checks instead of killing the run (the pinned count must
+ *  still match on a broken tree — that is what makes a mutation comparable). */
+function consentFacts() {
+  try {
+    const LogSheet = CONSENT_LIB.loadSource(LOG_SHEET).LogSheet;
+    if (typeof LogSheet !== 'function') return { error: 'LogSheet.tsx does not export a LogSheet component' };
+    const api = CONSENT_LIB.mountTree(LogSheet, { visible: true, onClose: () => {}, onLogged: () => {}, partnerName: 'Rish' });
+    const initial = { tree: api.tree, selected: CONSENT_LIB.selectedChips(api.tree) };
+    const firstFrame = {
+      selected: CONSENT_LIB.selectedChips(api.firstTree),
+      disclosureNodes: CONSENT_LIB.textNodes(api.firstTree, DISCLOSURE).length,
+    };
+    const glowChip = CONSENT_LIB.pressableByLabel(api.tree, ENHANCEMENT_CHIP);
+    if (!glowChip) return { error: `no chip labelled "${ENHANCEMENT_CHIP}" with an onPress handler is rendered` };
+    glowChip.props.onPress();
+    const afterSelect = { tree: api.tree, selected: CONSENT_LIB.selectedChips(api.tree) };
+    api.render({ visible: false });
+    api.render({ visible: true });
+    const afterReopen = { tree: api.tree, selected: CONSENT_LIB.selectedChips(api.tree) };
+    return {
+      initial,
+      firstFrame,
+      afterSelect,
+      afterReopen,
+      renders: api.renders,
+      alerts: CONSENT_LIB.alerts.slice(),
+      placement: CONSENT_LIB.disclosurePlacement(afterSelect.tree, DISCLOSURE, SKIN_CHIP_LABELS),
+      disclosureCountAfterSelect: CONSENT_LIB.textNodes(afterSelect.tree, DISCLOSURE).length,
+      disclosureCountInitial: CONSENT_LIB.textNodes(initial.tree, DISCLOSURE).length,
+      helperCountInitial: CONSENT_LIB.textNodes(initial.tree, LOOK_HELPER).length,
+      helperCountAfterSelect: CONSENT_LIB.textNodes(afterSelect.tree, LOOK_HELPER).length,
+    };
+  } catch (e) {
+    return { error: `${e && e.name}: ${e && e.message}` };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// the DECLARATION facts the tree cannot show — read from the same source file
+// ---------------------------------------------------------------------------
+const LOG_SHEET_SRC = fs.readFileSync(LOG_SHEET, 'utf8');
+const PERSISTENCE_BANS = [
+  ['AsyncStorage', /\bAsyncStorage\b/],
+  ['SecureStore', /\bSecureStore\b/],
+  ['MMKV', /\bMMKV\b/],
+  ['localStorage', /\blocalStorage\b/],
+  ['sessionStorage', /\bsessionStorage\b/],
+  ['a persistence module import', /from\s+['"][^'"]*(?:secure-store|async-storage|mmkv|@\/lib\/storage|@\/lib\/settings)[^'"]*['"]/i],
+  ['setItem/getItem', /\.(?:set|get)Item(?:Sync|Async)?\s*\(/],
+  ['a "remember my look" flag', /\brememberMyLook\b|\bsavedSelfieFilter\b|\bSELFIE_FILTER_SAVED\b|\bspotter[._-]?look[._-]?filter\b/i],
+];
+function persistenceViolations(src) {
+  return PERSISTENCE_BANS.filter(([, re]) => re.test(src)).map(([name]) => name);
+}
+/** The reset that makes "never sticky" work: `setFilter('none')` INSIDE the
+ *  effect keyed on `[visible]`. */
+function resetEffectFacts(src) {
+  const anchor = src.indexOf('}, [visible]);');
+  if (anchor < 0) return { ok: false, why: 'no effect keyed on [visible] in LogSheet.tsx' };
+  const start = src.lastIndexOf('useEffect(', anchor);
+  if (start < 0) return { ok: false, why: 'the [visible] dependency is not on a useEffect' };
+  const body = src.slice(start, anchor);
+  const resetAt = body.indexOf('setFilter(\'none\')');
+  const resetAtDq = body.indexOf('setFilter("none")');
+  const at = resetAt >= 0 ? resetAt : resetAtDq;
+  if (at < 0) return { ok: false, why: 'the [visible] effect never resets the filter to \'none\'' };
+  return { ok: true, why: `setFilter('none') at +${at} inside the effect keyed on [visible] (${body.length} chars)`, body };
+}
+
+// ---- the two promise checks + their declaration companions ----------------
+const consent = consentFacts();
+if (consent.error) {
+  for (const name of [
+    'consent.default-off-initial',
+    'consent.disclosure-absent-while-off',
+    'consent.disclosure-inline-on-select',
+    'consent.disclosure-not-modal',
+    'consent.disclosure-single-surface',
+    'consent.never-sticky-across-opens',
+  ]) {
+    record(false, name, `the real LogSheet could not be mounted: ${consent.error}`);
+  }
+} else {
+  // (a) DEFAULT OFF — the first render of the sheet selects the LOOK 'None' chip
+  //     and nothing in the SKIN row. This is the shipped tree, not a constant.
+  record(
+    consent.firstFrame.selected.length === 1 && consent.firstFrame.selected[0] === NONE_CHIP &&
+      consent.initial.selected.length === 1 && consent.initial.selected[0] === NONE_CHIP,
+    'consent.default-off-initial',
+    `first frame (before any effect) selects [${consent.firstFrame.selected.join(', ')}], settled render selects [${consent.initial.selected.join(', ')}] (both want exactly ["${NONE_CHIP}"]; SKIN row rendered ${SKIN_CHIP_LABELS.length} chip(s): [${SKIN_CHIP_LABELS.join(', ')}]) — an initialiser of '${FIRST_ENHANCEMENT}' would flash the enhancement on and fails here`,
+  );
+  // ...and that default is VISIBLE to the user: with nothing selected the
+  // disclosure is absent and the LOOK helper is in its place.
+  record(
+    consent.disclosureCountInitial === 0 && consent.helperCountInitial === 1 && consent.firstFrame.disclosureNodes === 0,
+    'consent.disclosure-absent-while-off',
+    `at the default state: disclosure nodes = ${consent.disclosureCountInitial} in the settled render / ${consent.firstFrame.disclosureNodes} in the first frame (want 0), LOOK helper nodes = ${consent.helperCountInitial} (want 1)`,
+  );
+  // (b) the disclosure, once an enhancement IS chosen, is a one-time INLINE line
+  record(
+    consent.placement.ok,
+    'consent.disclosure-inline-on-select',
+    `after tapping "${ENHANCEMENT_CHIP}": ${consent.placement.why}`,
+  );
+  record(
+    consent.placement.ok && consent.alerts.length === 0,
+    'consent.disclosure-not-modal',
+    `alerts raised while the sheet was driven = ${consent.alerts.length} (want 0); no Alert can carry the disclosure`,
+  );
+  record(
+    consent.disclosureCountAfterSelect === 1 && (LOG_SHEET_SRC.split('{SELFIE_ENHANCEMENT_DISCLOSURE}').length - 1) === 1,
+    'consent.disclosure-single-surface',
+    `disclosure rendered nodes after selecting = ${consent.disclosureCountAfterSelect} (want 1), render sites of {SELFIE_ENHANCEMENT_DISCLOSURE} in LogSheet.tsx = ${LOG_SHEET_SRC.split('{SELFIE_ENHANCEMENT_DISCLOSURE}').length - 1} (want 1) — one line, one surface, no dialog to dismiss`,
+  );
+  // (c) NEVER STICKY — choose, close the sheet, reopen it: back to 'none'.
+  record(
+    consent.afterReopen.selected.length === 1 && consent.afterReopen.selected[0] === NONE_CHIP,
+    'consent.never-sticky-across-opens',
+    `open → tap "${ENHANCEMENT_CHIP}" (selected [${consent.afterSelect.selected.join(', ')}]) → close → reopen selects [${consent.afterReopen.selected.join(', ')}] (want ["${NONE_CHIP}"]; ${consent.renders} renders in the sequence)`,
+  );
+}
+const persistence = persistenceViolations(LOG_SHEET_SRC);
+record(
+  persistence.length === 0,
+  'consent.no-persistence-in-source',
+  `persistence APIs / storage imports in LogSheet.tsx = [${persistence.join(', ')}] — the choice cannot be remembered across launches`,
+);
+const reset = resetEffectFacts(LOG_SHEET_SRC);
+record(reset.ok, 'consent.reset-on-open-declaration', `${reset.why}`);
+
 // ---- negative controls: the gate MUST fail on an uncapped implementation ----
 function runControl(name) {
   if (name === mode) return null; // when run directly, its own verdicts are the output
@@ -718,6 +1206,66 @@ if (mode === 'shipping') {
     const fails = r.failed.length + (r.controlLoc.differing.length > 1 ? 1 : 0);
     record(fails > 0, `control.${name}-must-fail`, `uncapped reference implementation fails ${fails} bound(s) through this same measurement code`);
   }
+  // ---- the consent promises must be able to fail ---------------------------
+  // Same discipline as the caps controls above: hand-built trees that DO break
+  // the promise are pushed through the SAME analysers the passing checks use,
+  // and the analyser must reject them. (The end-to-end half — the real source
+  // mutated four ways, exit 1 captured directly on each — is recorded in
+  // /home/team/shared/beauty-consent-gate-2026-10-05.md.)
+  function stickyControlFacts() {
+    const H = CONSENT_LIB.Hooks;
+    const BAG = { saved: FIRST_ENHANCEMENT }; // "as if read from storage at launch"
+    function StickySheet(props) {
+      const [chosen, setChosen] = H.useState(BAG.saved);
+      H.useEffect(() => { BAG.saved = chosen; }, [chosen]);
+      const chip = (id) => React.createElement('Pressable', {
+        accessibilityRole: 'button',
+        accessibilityLabel: F.filterA11yLabel(id),
+        accessibilityState: { selected: chosen === id },
+        onPress: () => setChosen(id),
+      }, React.createElement('Text', null, F.SELFIE_FILTER_PRESETS[id].label));
+      return React.createElement('Modal', { visible: props.visible },
+        React.createElement('View', null, ['none'].concat(SKIN_FAMILY.ids).map(chip)));
+    }
+    const api = CONSENT_LIB.mountTree(StickySheet, { visible: true });
+    const before = CONSENT_LIB.selectedChips(api.tree);
+    const chip = CONSENT_LIB.pressableByLabel(api.tree, ENHANCEMENT_CHIP);
+    if (chip) chip.props.onPress();
+    api.render({ visible: false });
+    api.render({ visible: true });
+    const after = CONSENT_LIB.selectedChips(api.tree);
+    return { before, after, sticky: after.length === 1 && after[0] !== NONE_CHIP };
+  }
+  function modalControlPlacement() {
+    const tree = React.createElement('Modal', { visible: true },
+      React.createElement('View', null,
+        React.createElement('Modal', { visible: true }, React.createElement('Text', null, DISCLOSURE)),
+        React.createElement('ScrollView', null,
+          SKIN_FAMILY.ids.map((id) => React.createElement('Pressable', { accessibilityLabel: F.filterA11yLabel(id) })))));
+    return CONSENT_LIB.disclosurePlacement(tree, DISCLOSURE, SKIN_CHIP_LABELS);
+  }
+  const stickyControl = stickyControlFacts();
+  record(
+    stickyControl.sticky,
+    'control.sticky-choice-must-fail',
+    `a sheet that seeds its state from storage and never resets reports [${stickyControl.after.join(', ')}] after close+reopen (was [${stickyControl.before.join(', ')}]) — the never-sticky analyser rejects it`,
+  );
+  const modalControl = modalControlPlacement();
+  record(
+    !modalControl.ok,
+    'control.modal-disclosure-must-fail',
+    `a tree that wraps the disclosure in its own <Modal> is rejected by the same placement analyser :: ${modalControl.why}`,
+  );
+  const MUTATED_SRC = LOG_SHEET_SRC.replace(
+    "setFilter(clearable && selected ? 'none' : f)}",
+    "setFilter(clearable && selected ? 'none' : f);\n          void SecureStore.setItemAsync('spotter.selfieFilter', String(f));",
+  );
+  const mutatedViolations = persistenceViolations(MUTATED_SRC);
+  record(
+    MUTATED_SRC !== LOG_SHEET_SRC && mutatedViolations.length > 0,
+    'control.persistent-source-must-fail',
+    `one injected write turns the same analyser from [${persistence.join(', ')}] to [${mutatedViolations.join(', ')}] violations`,
+  );
   // Informational: the incremental cost of the grade against the existing path,
   // same machine, same process (the Hermes budget is a separate, unmet question).
   // Both timings include the same decode + encode of the same JPEG, so the
