@@ -481,6 +481,96 @@ try:
             f"parsed {cf_parsed} result lines (exit={cf_guard.returncode}) — the guard lost checks")
 except Exception as e:  # node missing / script missing / timeout — never a silent skip
     rec("0h-compile-freshness", "compile-freshness guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
+# ---------------- FLOW 0i: SIGN-OUT + FEED-LABEL GUARD (offline) -------------
+# The owner's sign-out directive ("so the owner can switch accounts without
+# deleting and reinstalling") and the FeedCard caption bug (a CO-MEMBER's card
+# hardcoded 'YOU' / 'YOUR SPOT' next to the co-member's own name) both shipped
+# fixes to the app source: src/features/profile/ProfileScreen.tsx gained the
+# sign-out control + confirmation + honest-failure paths, and FeedCard.tsx now
+# takes its thumb labels from src/lib/workouts.ts.
+# scripts/smoke/signout-feed-labels-guard.cjs is the gate: it MOUNTS both REAL
+# components in plain Node (leaf stubs, mini hooks runtime, no reconciler, no
+# device) and asserts on the element tree that ships — a control that exists and
+# is wired, nothing happens before the confirmation, a real Cancel leaves the
+# account signed in, confirming calls auth signOut exactly once and lands on
+# RequireSession.SIGNED_OUT_ROUTE, both failure shapes are rendered rather than
+# silently swallowed, a pending write that lands after the screen is torn down
+# does not write state, the DELETE-ACCOUNT flow is untouched, and a co-member's
+# card claims neither 'YOU' nor 'YOUR SPOT' while the owner's own card still
+# does. It carries its own negative control (the pre-fix FeedCard shape must be
+# reported as claiming YOU).
+# Wired as a flow on 2026-10-05 — the guard was green but NOTHING ran it, so it
+# could have rotted silently. No live credentials needed: it never opens a
+# socket. Same gate as flows 0/0b/0c/0d/0e/0f/0g/0h: missing/shrunken = FAIL,
+# and any FAIL exits non-zero.
+SIGNOUT_GUARD_SCRIPT = os.path.join(REPO_ROOT, "scripts", "smoke", "signout-feed-labels-guard.cjs")
+SIGNOUT_GUARD_CHECKS = 24  # every PASS/FAIL line it prints; a shrink is itself a failure
+print(f"[guard] node {SIGNOUT_GUARD_SCRIPT} (cwd={REPO_ROOT})", flush=True)
+try:
+    signout_guard = subprocess.run(["node", SIGNOUT_GUARD_SCRIPT], cwd=REPO_ROOT,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, timeout=300)
+    signout_parsed = 0
+    for sgline in (signout_guard.stdout or "").splitlines():
+        sgm = re.match(r"^(PASS|FAIL)\s+(.*?)(?:\s+::\s+(.*))?$", sgline.rstrip())
+        if not sgm:
+            continue
+        signout_parsed += 1
+        rec("0i-signout-feed-labels", sgm.group(2).strip(), sgm.group(1), (sgm.group(3) or "").strip())
+    if signout_parsed == 0:
+        rec("0i-signout-feed-labels", "signout-feed-labels guard emitted PASS/FAIL lines", FAIL,
+            f"parsed 0 result lines, exit={signout_guard.returncode}, stderr={short((signout_guard.stderr or '').strip())}")
+    elif signout_parsed != SIGNOUT_GUARD_CHECKS:
+        rec("0i-signout-feed-labels", f"signout-feed-labels guard reported all {SIGNOUT_GUARD_CHECKS} checks", FAIL,
+            f"parsed {signout_parsed} result lines (exit={signout_guard.returncode}) — the guard lost checks")
+except Exception as e:  # node missing / script missing / timeout — never a silent skip
+    rec("0i-signout-feed-labels", "signout-feed-labels guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
+# ---------------- FLOW 0j: BEAUTY CAPS + CONSENT GUARD (offline) -------------
+# The owner-approved, GEOMETRY-FREE enhancement ("Glow", SKIN chip family) has
+# two kinds of promise and scripts/smoke/skin-caps-guard.cjs gates both.
+#   MEASURED: it loads src/lib/filters.ts from SOURCE in this run and calls the
+#   module's own applySelfieEnhancementRGBA / skinMaskWeight over synthetic
+#   selfies with a known skin map, asserting the memo's caps as NUMBERS (relative
+#   skin lift <= 8%, out-of-mask delta <= 2/255, hue <= 2 deg, saturation <= 6%,
+#   added clipping and crush <= 0.1%), plus the structural bounds that make
+#   "geometry-free" a test (per-pixel only, no new native module, no new
+#   permission, no landmark dependency, the environment shot never routed
+#   through the bake, one bake call site). Two negative controls — the app's own
+#   Bright matrix applied globally, and an unmasked 12 px blur — must FAIL the
+#   same measurement code.
+#   CONSENT (added 2026-10-05): the two promises the caps cannot see — the
+#   enhancement is DEFAULT OFF and NEVER STICKY (no persistence, no "remember my
+#   look"), and the disclosure is ONE-TIME, INLINE and NON-MODAL. Those are
+#   element-tree facts, so the guard MOUNTS the real LogSheet.tsx with a
+#   dep-aware hooks runtime and drives open -> tap the Glow chip -> close ->
+#   reopen, asserting the selected chip, where the disclosure is drawn, and that
+#   no second Modal or Alert can sit between it and the row it explains. Two
+#   declaration checks read the reset effect and ban persistence APIs, each with
+#   a mutated-source negative control.
+# No live credentials: it never opens a socket. Same gate as flows
+# 0/0b/0c/0d/0e/0f/0g/0h/0i: missing/shrunken = FAIL, any FAIL exits non-zero.
+SKIN_CAPS_GUARD_SCRIPT = os.path.join(REPO_ROOT, "scripts", "smoke", "skin-caps-guard.cjs")
+SKIN_CAPS_GUARD_CHECKS = 47  # every PASS/FAIL line it prints; a shrink is itself a failure
+print(f"[guard] node {SKIN_CAPS_GUARD_SCRIPT} (cwd={REPO_ROOT})", flush=True)
+try:
+    caps_guard = subprocess.run(["node", SKIN_CAPS_GUARD_SCRIPT], cwd=REPO_ROOT,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, timeout=600)
+    caps_parsed = 0
+    for cgline in (caps_guard.stdout or "").splitlines():
+        cgm = re.match(r"^(PASS|FAIL)\s+(.*?)(?:\s+::\s+(.*))?$", cgline.rstrip())
+        if not cgm:
+            continue
+        caps_parsed += 1
+        rec("0j-skin-caps", cgm.group(2).strip(), cgm.group(1), (cgm.group(3) or "").strip())
+    if caps_parsed == 0:
+        rec("0j-skin-caps", "skin-caps guard emitted PASS/FAIL lines", FAIL,
+            f"parsed 0 result lines, exit={caps_guard.returncode}, stderr={short((caps_guard.stderr or '').strip())}")
+    elif caps_parsed != SKIN_CAPS_GUARD_CHECKS:
+        rec("0j-skin-caps", f"skin-caps guard reported all {SKIN_CAPS_GUARD_CHECKS} checks", FAIL,
+            f"parsed {caps_parsed} result lines (exit={caps_guard.returncode}) — the guard lost checks")
+except Exception as e:  # node missing / script missing / timeout — never a silent skip
+    rec("0j-skin-caps", "skin-caps guard ran to completion", FAIL, f"{type(e).__name__}: {e}")
 # ---------------- FLOW 1: SIGNUP + SIGNIN ----------------
 users = {}
 for k in "abc":
